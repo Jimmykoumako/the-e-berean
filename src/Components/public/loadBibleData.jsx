@@ -1,76 +1,33 @@
 import { useState } from "react";
 import { supabase } from "./../../../supabaseClient";
-import { chapterCountMap, getTestamentId } from "../../utlis/bibleBooks.js";
+import { getTestamentId } from "../../utlis/bibleBooks.js";
 
-// Create a Web Worker for parsing CSV
-const workerCode = `
-  self.onmessage = async (e) => {
-    const { fileContent } = e.data;
-    const lines = fileContent.split(/\\r?\\n/);
-    const header = lines[0];
-    const rows = lines.slice(1).filter(line => line.trim());
-    
-    const parseCSVLine = (line) => {
-      const result = [];
-      let current = '';
-      let inQuotes = false;
-      
-      for (let i = 0; i < line.length; i++) {
-        const char = line[i];
-        if (char === '"') {
-          if (inQuotes && line[i + 1] === '"') {
-            current += '"';
-            i++;
-          } else {
-            inQuotes = !inQuotes;
-          }
-        } else if (char === ',' && !inQuotes) {
-          result.push(current.trim());
-          current = '';
-        } else {
-          current += char;
-        }
-      }
-      result.push(current.trim());
-      return result;
-    };
+const BATCH_SIZE = 1000; // Increased batch size since we're handling fewer fields
 
-    const parsedData = rows.map(row => {
-      const [book, chapter, verse, text] = parseCSVLine(row);
-      return { book, chapter, verse, text: text.replace(/^"(.*)"$/, '$1').replace(/""/g, '"') };
-    });
-
-    self.postMessage({ parsedData });
-  };
-`;
-
-const workerBlob = new Blob([workerCode], { type: 'text/javascript' });
-const workerUrl = URL.createObjectURL(workerBlob);
-
-const BATCH_SIZE = 500; // Adjust based on Supabase limits
-
-const LoadBibleData = ({ bibleVersionId, storageBucket = "bibles" }) => {
+const LoadBibleData = ({ bibleVersionId }) => {
     const [selectedFile, setSelectedFile] = useState(null);
     const [loading, setLoading] = useState(false);
     const [progress, setProgress] = useState(0);
     const [error, setError] = useState(null);
 
-    // Process books in bulk
+    // Optimized books processing - only essential fields
     const processBooksInBulk = async (uniqueBooks) => {
         const booksToInsert = uniqueBooks.map((book, index) => ({
             name: book,
-            code_name: book,
             bible_version_id: bibleVersionId,
             testament_id: getTestamentId(book),
             order_in_version: index,
-            chapter_count: chapterCountMap[book] || 0,
+            abbreviation: book.substring(0, 3).toUpperCase(), // Simple abbreviation
         }));
 
         const { data: books, error } = await supabase
             .from("books")
-            .upsert(booksToInsert, { onConflict: ["name", "bible_version_id"] })
-            .select("id, name");
+            .upsert(booksToInsert, {
+                onConflict: ["name", "bible_version_id"],
+                returning: ["id", "name"]
+            }).select();
 
+        console.log(books)
         if (error) throw error;
         return books.reduce((acc, book) => {
             acc[book.name] = book.id;
@@ -78,17 +35,20 @@ const LoadBibleData = ({ bibleVersionId, storageBucket = "bibles" }) => {
         }, {});
     };
 
-    // Process chapters in bulk
+    // Optimized chapters processing
     const processChaptersInBulk = async (chaptersData, booksMap) => {
-        const chaptersToInsert = chaptersData.map(({ book, chapter }) => ({
+        const chaptersToInsert = chaptersData.map(({ book, chapter, verseCount }) => ({
             book_id: booksMap[book],
             chapter_number: parseInt(chapter, 10),
+            verse_count: verseCount
         }));
 
         const { data: chapters, error } = await supabase
             .from("chapters")
-            .upsert(chaptersToInsert, { onConflict: ["book_id", "chapter_number"] })
-            .select("id, book_id, chapter_number");
+            .upsert(chaptersToInsert, {
+                onConflict: ["book_id", "chapter_number"],
+                returning: ["id", "book_id", "chapter_number"]
+            }).select();
 
         if (error) throw error;
         return chapters.reduce((acc, chapter) => {
@@ -98,12 +58,12 @@ const LoadBibleData = ({ bibleVersionId, storageBucket = "bibles" }) => {
         }, {});
     };
 
-    // Process verses in optimized batches
-    const processVersesBatch = async (verses, chaptersMap, currentBatch, totalBatches) => {
-        const versesToInsert = verses.map(({ book, chapter, verse, text }) => ({
-            chapter_id: chaptersMap[`${book}_${chapter}`],
+    // Optimized verse batch processing
+    const processVerseBatch = async (verses, chaptersMap) => {
+        const versesToInsert = verses.map(({ chapter_key, verse, text }) => ({
+            chapter_id: chaptersMap[chapter_key],
             verse_number: parseInt(verse, 10),
-            text: text,
+            text: text
         }));
 
         const { error } = await supabase
@@ -111,7 +71,6 @@ const LoadBibleData = ({ bibleVersionId, storageBucket = "bibles" }) => {
             .insert(versesToInsert);
 
         if (error) throw error;
-        setProgress(Math.round((currentBatch / totalBatches) * 100));
     };
 
     const handleLoadFile = async () => {
@@ -124,43 +83,65 @@ const LoadBibleData = ({ bibleVersionId, storageBucket = "bibles" }) => {
         setProgress(0);
 
         try {
-            // Read file content
             const fileContent = await selectedFile.text();
+            const lines = fileContent.split(/\r?\n/).filter(line => line.trim());
 
-            // Create Web Worker for parsing
-            const worker = new Worker(workerUrl);
+            // Skip header and collect unique books and chapters
+            const uniqueBooks = new Set();
+            const chaptersMap = new Map();
+            const verses = [];
 
-            // Parse CSV in Web Worker
-            const parsedData = await new Promise((resolve, reject) => {
-                worker.onmessage = (e) => resolve(e.data.parsedData);
-                worker.onerror = (e) => reject(e);
-                worker.postMessage({ fileContent });
-            });
+            // First pass - collect metadata
+            for (let i = 1; i < lines.length; i++) {
+                // Parse CSV considering quotes
+                let inQuotes = false;
+                let currentField = '';
+                const fields = [];
 
-            // Clean up worker
-            worker.terminate();
+                for (let char of lines[i]) {
+                    if (char === '"') {
+                        inQuotes = !inQuotes;
+                    } else if (char === ',' && !inQuotes) {
+                        fields.push(currentField.trim());
+                        currentField = '';
+                    } else {
+                        currentField += char;
+                    }
+                }
+                fields.push(currentField.trim()); // Add last field
 
-            // Extract unique books and chapters
-            const uniqueBooks = new Set(parsedData.map(row => row.book));
-            const chaptersSet = new Set();
-            parsedData.forEach(({ book, chapter }) => {
-                chaptersSet.add(JSON.stringify({ book, chapter }));
-            });
+                const [book, chapter, verse, text] = fields;
 
-            // Process books and chapters in bulk
-            const booksMap = await processBooksInBulk([...uniqueBooks]);
-            const chaptersData = [...chaptersSet].map(ch => JSON.parse(ch));
-            const chaptersMap = await processChaptersInBulk(chaptersData, booksMap);
+                if (!book || !chapter || !verse || !text) continue;
 
-            // Process verses in batches
-            const batches = [];
-            for (let i = 0; i < parsedData.length; i += BATCH_SIZE) {
-                batches.push(parsedData.slice(i, i + BATCH_SIZE));
+                // Clean text field (remove surrounding quotes)
+                const cleanText = text.replace(/^"(.*)"$/, '$1').replace(/""/g, '"');
+
+                uniqueBooks.add(book);
+                const chapterKey = `${book}_${chapter}`;
+                if (!chaptersMap.has(chapterKey)) {
+                    chaptersMap.set(chapterKey, { book, chapter, verseCount: 1 });
+                } else {
+                    chaptersMap.get(chapterKey).verseCount++;
+                }
+
+                verses.push({ chapter_key: chapterKey, verse, text: cleanText });
             }
 
-            // Process each batch sequentially to avoid overwhelming Supabase
-            for (let i = 0; i < batches.length; i++) {
-                await processVersesBatch(batches[i], chaptersMap, i + 1, batches.length);
+            // Process books
+            const booksMap = await processBooksInBulk([...uniqueBooks]);
+
+            // Process chapters
+            const chaptersLookup = await processChaptersInBulk(
+                [...chaptersMap.values()],
+                booksMap
+            );
+
+            // Process verses in batches
+            for (let i = 0; i < verses.length; i += BATCH_SIZE) {
+                const batch = verses.slice(i, i + BATCH_SIZE);
+                await processVerseBatch(batch, chaptersLookup);
+                setProgress(Math.round(((i + batch.length) / verses.length) * 100));
             }
 
             alert("Bible data successfully loaded!");
@@ -169,7 +150,6 @@ const LoadBibleData = ({ bibleVersionId, storageBucket = "bibles" }) => {
             setError(err.message);
         } finally {
             setLoading(false);
-            URL.revokeObjectURL(workerUrl);
         }
     };
 

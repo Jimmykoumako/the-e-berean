@@ -56,8 +56,8 @@ function App() {
 
             {/*</div>*/}
             {/*<DownloadBibleFiles  onLoadFile={handleLoadFile} />*/}
-            <BibleDataUploader />
-            {/*<BibleSearch />*/}
+            {/*<BibleDataUploader />*/}
+            <BibleSearch />
         </div>
     );
 }
