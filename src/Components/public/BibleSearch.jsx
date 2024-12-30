@@ -1,10 +1,31 @@
 import { useBibleData } from './../../hooks/bibleData.js';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
     ChevronDownIcon,
     ChevronLeftIcon,
     ChevronRightIcon,
+    BookOpenIcon,
+    BookmarkIcon,
+    PencilIcon,
+    ArrowLeftIcon,
 } from '@heroicons/react/24/solid';
+
+const SidebarItem = ({ icon: Icon, label, onClick, collapsed }) => (
+    <li
+        className="cursor-pointer flex items-center hover:bg-gray-700 p-2 rounded"
+        onClick={onClick}
+    >
+        <Icon className="h-6 w-6 text-white" />
+        {!collapsed && <span className="ml-2">{label}</span>}
+    </li>
+);
+
+const BackHeader = ({ title, onBack, collapsed }) => (
+    <div className="flex items-center mb-4">
+        <ChevronLeftIcon className="h-6 w-6 cursor-pointer" onClick={onBack} />
+        {!collapsed && <h2 className="text-xl font-bold ml-2">{title}</h2>}
+    </div>
+);
 
 export default function BibleNavigation() {
     const {
@@ -23,7 +44,8 @@ export default function BibleNavigation() {
         fetchAndSetVerses,
     } = useBibleData();
 
-    const [sidebarSection, setSidebarSection] = useState('main'); // Current sidebar section
+    const [sidebarSection, setSidebarSection] = useState('main');
+    const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
     const [highlightedVerses, setHighlightedVerses] = useState(
         JSON.parse(localStorage.getItem('highlights')) || {}
     );
@@ -32,23 +54,18 @@ export default function BibleNavigation() {
     );
     const [notes, setNotes] = useState(JSON.parse(localStorage.getItem('notes')) || {});
     const [searchQuery, setSearchQuery] = useState('');
-    const [filteredVerses, setFilteredVerses] = useState([]);
-    const [expandedBooks, setExpandedBooks] = useState({}); // Track expanded books
+    const [expandedBooks, setExpandedBooks] = useState({});
 
     useEffect(() => {
         if (selectedVersion) fetchBooks(selectedVersion);
     }, [selectedVersion]);
 
-    useEffect(() => {
-        if (verses.length > 0) {
-            setFilteredVerses(
-                verses.filter(
-                    (verse) =>
-                        verse.text.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                        verse.verse_number.toString().includes(searchQuery)
-                )
-            );
-        }
+    const filteredVerses = useMemo(() => {
+        return verses.filter(
+            (verse) =>
+                verse.text.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                verse.verse_number.toString().includes(searchQuery)
+        );
     }, [verses, searchQuery]);
 
     const toggleBookExpansion = (bookId) => {
@@ -56,6 +73,7 @@ export default function BibleNavigation() {
             ...prev,
             [bookId]: !prev[bookId],
         }));
+        if (!expandedBooks[bookId]) fetchChapters(bookId);
     };
 
     const handleChapterClick = (bookId, chapterId) => {
@@ -74,6 +92,7 @@ export default function BibleNavigation() {
         const updatedBookmarks = [...bookmarks, verse];
         setBookmarks(updatedBookmarks);
         localStorage.setItem('bookmarks', JSON.stringify(updatedBookmarks));
+        alert('Verse bookmarked!');
     };
 
     const addNote = (verse) => {
@@ -82,39 +101,34 @@ export default function BibleNavigation() {
             const updatedNotes = { ...notes, [verse.id]: note };
             setNotes(updatedNotes);
             localStorage.setItem('notes', JSON.stringify(updatedNotes));
+            alert('Note added!');
         }
     };
-
-    const BackHeader = ({ title, onBack }) => (
-        <div className="flex items-center mb-4">
-            <ChevronLeftIcon
-                className="h-6 w-6 cursor-pointer"
-                onClick={onBack}
-            />
-            <h2 className="text-xl font-bold ml-2">{title}</h2>
-        </div>
-    );
 
     const renderSidebarContent = () => {
         switch (sidebarSection) {
             case 'main':
                 return (
-                    <>
-                        <h2 className="text-xl font-bold mb-4">Menu</h2>
-                        <ul className="space-y-4">
-                            {['Bible', 'Bookmarks', 'Notes'].map((item) => (
-                                <li
-                                    key={item}
-                                    className="cursor-pointer hover:bg-gray-700 p-2 rounded"
-                                    onClick={() =>
-                                        setSidebarSection(item.toLowerCase())
-                                    }
-                                >
-                                    {item}
-                                </li>
-                            ))}
-                        </ul>
-                    </>
+                    <ul className="space-y-4">
+                        <SidebarItem
+                            icon={BookOpenIcon}
+                            label="Bible"
+                            onClick={() => setSidebarSection('bible')}
+                            collapsed={sidebarCollapsed}
+                        />
+                        <SidebarItem
+                            icon={BookmarkIcon}
+                            label="Bookmarks"
+                            onClick={() => setSidebarSection('bookmarks')}
+                            collapsed={sidebarCollapsed}
+                        />
+                        <SidebarItem
+                            icon={PencilIcon}
+                            label="Notes"
+                            onClick={() => setSidebarSection('notes')}
+                            collapsed={sidebarCollapsed}
+                        />
+                    </ul>
                 );
             case 'bible':
                 return (
@@ -122,6 +136,7 @@ export default function BibleNavigation() {
                         <BackHeader
                             title="Bible"
                             onBack={() => setSidebarSection('main')}
+                            collapsed={sidebarCollapsed}
                         />
                         <div>
                             <label className="block text-sm font-medium mb-1">
@@ -182,6 +197,7 @@ export default function BibleNavigation() {
                         <BackHeader
                             title="Bookmarks"
                             onBack={() => setSidebarSection('main')}
+                            collapsed={sidebarCollapsed}
                         />
                         <ul className="space-y-2">
                             {bookmarks.map((bookmark, idx) => (
@@ -207,15 +223,14 @@ export default function BibleNavigation() {
                         <BackHeader
                             title="Notes"
                             onBack={() => setSidebarSection('main')}
+                            collapsed={sidebarCollapsed}
                         />
                         <ul className="space-y-2">
                             {Object.entries(notes).map(([verseId, note]) => (
                                 <li
                                     key={verseId}
                                     className="p-2 bg-gray-700 rounded cursor-pointer hover:bg-gray-600"
-                                    onClick={() => {
-                                        alert(`Note for Verse ${verseId}: ${note}`);
-                                    }}
+                                    onClick={() => alert(`Note for Verse ${verseId}: ${note}`)}
                                 >
                                     Verse {verseId}: {note.slice(0, 30)}...
                                 </li>
@@ -231,7 +246,20 @@ export default function BibleNavigation() {
     return (
         <div className="flex h-screen">
             {/* Sidebar */}
-            <div className="w-64 bg-gray-800 text-white p-4">
+            <div
+                className={`${
+                    sidebarCollapsed ? 'w-16' : 'w-64'
+                } bg-gray-800 text-white p-4 transition-all duration-300`}
+            >
+                <div className="flex items-center justify-between mb-4">
+                    {!sidebarCollapsed && <h2 className="text-xl font-bold">Menu</h2>}
+                    <ArrowLeftIcon
+                        className={`h-6 w-6 cursor-pointer transform ${
+                            sidebarCollapsed ? 'rotate-180' : ''
+                        }`}
+                        onClick={() => setSidebarCollapsed((prev) => !prev)}
+                    />
+                </div>
                 {renderSidebarContent()}
             </div>
 
