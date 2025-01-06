@@ -2,7 +2,6 @@ import {useState, useCallback, useEffect, useMemo} from 'react';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import _ from 'lodash';
-import {supabase} from "../../supabaseClient";
 
 // Types
 interface BibleReference {
@@ -24,38 +23,21 @@ interface Verse {
   text: string;
 }
 
-interface Chapter {
-  id: number;
-  book_id: number;
-  chapter_number: number;
-  verse_count: number;
-  title?: string;
-  theme?: string;
-}
-
-interface Book {
-  id: number;
-  bible_version_id: number;
-  name: string;
-  code_name: string;
-  order_in_version: number;
-  chapter_count: number;
+interface ReadingState {
+  currentVersion: string;
+  currentBook: string;
+  currentChapter: number;
+  currentVerse: number;
+  currentReference: string;
+  currentRange: VerseRange | null;
+  history: string[];
+  historyIndex: number;
 }
 
 interface UseBibleReadingProps {
   defaultVersion?: string;
   defaultReference?: string;
   supabaseClient: SupabaseClient;
-}
-
-interface ReadingState {
-  currentVersion: string;
-  currentBook: string;
-  currentChapter: number;
-  currentVerse: number;
-  currentRange: VerseRange | null;
-  history: string[];
-  historyIndex: number;
 }
 
 // Constants
@@ -80,10 +62,6 @@ export function useBibleReading({
     history: [defaultReference],
     historyIndex: 0
   });
-
-
-
-  // Query for current verse/range content
 
   // Utility functions
   const getVersionId = useCallback(async (version: string): Promise<number> => {
@@ -112,10 +90,6 @@ export function useBibleReading({
 
   // Fetch verse content
   const fetchVerseContent = useCallback(async () => {
-    console.log(readingState.currentRange)
-    console.log(readingState.currentReference)
-    console.log("Called: fetchVerseContent")
-    // Early return if we don't have required data
     if (!readingState.currentBook || !readingState.currentChapter) {
       throw new Error('Missing required reading state');
     }
@@ -126,7 +100,6 @@ export function useBibleReading({
 
       const startKey = await getReferenceKey(start);
       const endKey = await getReferenceKey(end);
-      console.log("Called: fetchVerseContent before SUPABASE")
 
       const { data: verses, error } = await supabaseClient
           .from('verses')
@@ -148,14 +121,10 @@ export function useBibleReading({
           .order('verse_number');
 
       if (error) throw error;
-      console.log("Called: The verse if")
-      console.log(verses)
       return verses;
     } else {
-      console.log("Called: fetchVerseContent the Else situation")
-
-      // Fetch entire chapter
-      const { data: verses, error } = await supabase
+      // Fetch single verse/chapter
+      const { data: verses, error } = await supabaseClient
           .from('verses')
           .select(`
           id,
@@ -175,33 +144,30 @@ export function useBibleReading({
           .order('verse_number');
 
       if (error) throw error;
-      console.log("Called: The verse else")
-
-      console.log(verses)
       return verses;
     }
-  }, [readingState, supabaseClient]);
+  }, [readingState, supabaseClient, getVersionId, getReferenceKey]);
 
   // Query for verse content
-  const { data: verseContent, isLoading } = useQuery({
+  const {
+    data: verseContent,
+    isLoading,
+    isError,
+    error,
+    isFetching
+  } = useQuery({
     queryKey: ['verses', readingState.currentRange ?? readingState.currentReference],
     queryFn: () => fetchVerseContent(),
     cacheTime: CACHE_TIME,
     staleTime: STALE_TIME,
-    enabled: Boolean(readingState.currentBook && readingState.currentChapter && readingState.currentVerse)
+    enabled: Boolean(readingState.currentBook && readingState.currentChapter)
   });
 
-  // Helper function to generate reference key
-  const generateReferenceKey = useCallback((reference: BibleReference): string => {
-    return `${reference.book}_${reference.chapter}_${reference.verse}`;
-  }, []);
-
-  // Parse a reference string into structured format
+  // Parse reference
   const parseReference = useCallback(async (reference: string): Promise<BibleReference> => {
     const parts = reference.split(' ');
     const book = parts.slice(0, -1).join(' ');
     const [chapter, verse] = parts[parts.length - 1].split(':').map(Number);
-    console.log("ParseRef got called")
 
     // Validate reference against database
     const { data: bookData, error: bookError } = await supabaseClient
@@ -210,9 +176,6 @@ export function useBibleReading({
         .eq('name', book)
         .eq('bible_version_id', await getVersionId(readingState.currentVersion))
         .single();
-    console.log("Fetching from supabase")
-
-  console.log(bookData)
 
     if (bookError || !bookData) {
       throw new Error(`Invalid book: ${book}`);
@@ -230,63 +193,28 @@ export function useBibleReading({
       throw new Error(`Invalid chapter or verse: ${chapter}:${verse}`);
     }
 
-    console.log({ book, chapter, verse })
     return { book, chapter, verse };
-  }, [readingState.currentVersion, supabaseClient]);
+  }, [readingState.currentVersion, supabaseClient, getVersionId]);
 
-console.log("Hello")
-console.log(defaultReference)
-
-  // Query for current verse/range content
-  const loadInitialContent = async () => {
-    console.log("Run loadInitialContent")
-    if (defaultReference) {
-      console.log("defaultReference", defaultReference)
-      try {
-        const parsedRef = await parseReference(defaultReference);
-        setReadingState(prev => ({
-          ...prev,
-          currentBook: parsedRef.book,
-          currentChapter: parsedRef.chapter,
-          currentVerse: parsedRef.verse
-        }));
-      } catch (error) {
-        console.error('Error loading initial reference:', error);
-      }
+  // Navigation functions
+  const goToReference = useCallback(async (reference: string) => {
+    try {
+      const parsedRef = await parseReference(reference);
+      setReadingState(prev => ({
+        ...prev,
+        currentBook: parsedRef.book,
+        currentChapter: parsedRef.chapter,
+        currentVerse: parsedRef.verse,
+        currentRange: null,
+        history: [...prev.history.slice(0, prev.historyIndex + 1), reference],
+        historyIndex: prev.historyIndex + 1
+      }));
+    } catch (error) {
+      console.error('Error navigating to reference:', error);
     }
-  };
+  }, [parseReference]);
 
-  loadInitialContent().then(()=>{
-    console.log(readingState)
-    console.log(isLoading)
-    console.log(verseContent)
-  });
-
-  // Initial data loading
-  // Initial data loading
-  useEffect(() => {
-    const loadInitialContent = async () => {
-      console.log("Run loadInitialContent in useEffect")
-      if (defaultReference) {
-        try {
-          const parsedRef = await parseReference(defaultReference);
-          setReadingState(prev => ({
-            ...prev,
-            currentBook: parsedRef.book,
-            currentChapter: parsedRef.chapter,
-            currentVerse: parsedRef.verse
-          }));
-          console.log(parsedRef)
-        } catch (error) {
-          console.error('Error loading initial reference:', error);
-        }
-      }
-    };
-
-    loadInitialContent();
-  }, [defaultReference, parseReference]);
-
-  // Generate a verse range
+  // Generate range
   const generateRange = useCallback(async (startRef: string, endRef: string): Promise<VerseRange> => {
     const start = await parseReference(startRef);
     const end = await parseReference(endRef);
@@ -316,28 +244,9 @@ console.log(defaultReference)
       endReference: end,
       referenceKey: `${startKey}-${endKey}`
     };
-  }, [parseReference, supabaseClient]);
+  }, [parseReference, getReferenceKey, supabaseClient]);
 
-
-  // Navigation functions
-  const goToReference = useCallback(async (reference: string) => {
-    try {
-      const parsedRef = await parseReference(reference);
-      setReadingState(prev => ({
-        ...prev,
-        currentBook: parsedRef.book,
-        currentChapter: parsedRef.chapter,
-        currentVerse: parsedRef.verse,
-        currentRange: null,
-        history: [...prev.history.slice(0, prev.historyIndex + 1), reference],
-        historyIndex: prev.historyIndex + 1
-      }));
-    } catch (error) {
-      console.error('Error navigating to reference:', error);
-    }
-  }, [parseReference]);
-
-  // Range handling functions
+  // Set range
   const setRange = useCallback(async (startRef: string, endRef: string) => {
     try {
       const range = await generateRange(startRef, endRef);
@@ -396,33 +305,36 @@ console.log(defaultReference)
         currentVersion: version
       }));
     }
-  }, []);
+  }, [getVersionId]);
 
+  // Initial data loading
+  useEffect(() => {
+    const loadInitialContent = async () => {
+      if (defaultReference) {
+        try {
+          const parsedRef = await parseReference(defaultReference);
+          setReadingState(prev => ({
+            ...prev,
+            currentBook: parsedRef.book,
+            currentChapter: parsedRef.chapter,
+            currentVerse: parsedRef.verse
+          }));
+        } catch (error) {
+          console.error('Error loading initial reference:', error);
+        }
+      }
+    };
 
+    loadInitialContent();
+  }, [defaultReference, parseReference]);
 
-
-
-  // Lodash utility functions
+  // Utility functions with lodash
   const groupVersesByChapter = useCallback((verses: Verse[]) => {
     return _.groupBy(verses, verse => verse.chapter_id);
   }, []);
 
   const sortVerses = useCallback((verses: Verse[]) => {
     return _.orderBy(verses, ['chapter_id', 'verse_number'], ['asc', 'asc']);
-  }, []);
-
-  const mergeRanges = useCallback((ranges: VerseRange[]) => {
-    return _(ranges)
-        .sortBy(range => range.startReference.chapter)
-        .reduce((result: VerseRange[], range) => {
-          const lastRange = _.last(result);
-          if (!lastRange || lastRange.endReference.verse < range.startReference.verse - 1) {
-            result.push(range);
-          } else {
-            lastRange.endReference = range.endReference;
-          }
-          return result;
-        }, []);
   }, []);
 
   const filterVersesByRange = useCallback((verses: Verse[], range: VerseRange) => {
@@ -437,29 +349,18 @@ console.log(defaultReference)
         .value();
   }, []);
 
-  const getPaginatedVerses = useCallback((verses: Verse[], pageSize: number = 20) => {
-    return _.chunk(verses, pageSize);
-  }, []);
-
-  const groupVersesByBook = useCallback((verses: Verse[]) => {
-    return _.groupBy(verses, verse => verse.chapters?.books?.name);
-  }, []);
-
-  const generateReadingStats = useCallback((verses: Verse[]) => {
-    return {
-      totalVerses: verses.length,
-      versesPerChapter: _.countBy(verses, 'chapter_id'),
-      averageVerseLength: _.meanBy(verses, verse => verse.text.length),
-      chapterDistribution: _.groupBy(verses, 'chapter_id')
-    };
-  }, []);
-
   const debouncedGoToReference = useMemo(
       () => _.debounce(goToReference, 300),
       [goToReference]
   );
 
   return {
+    // Loading states
+    isLoading,        // True during initial load
+    isFetching,       // True during background refetches
+    isError,          // True if query encountered an error
+    error,            // Error object if query failed
+
     // Current state
     currentVersion: readingState.currentVersion,
     currentReference: readingState.currentRange
@@ -469,7 +370,6 @@ console.log(defaultReference)
 
     // Content
     verseContent,
-    isLoading,
 
     // Navigation
     goToReference,
@@ -481,25 +381,17 @@ console.log(defaultReference)
 
     // Range handling
     setRange,
-    parseReference,
     generateRange,
-    mergeRanges,
     filterVersesByRange,
 
     // Version handling
     changeVersion,
 
     // Utility functions
-    generateReferenceKey,
-    getReferenceKey,
-
-    // Data organization
     groupVersesByChapter,
-    groupVersesByBook,
     sortVerses,
 
-    // Pagination and stats
-    getPaginatedVerses,
-    generateReadingStats
+    // Parse functions
+    parseReference
   };
 }
