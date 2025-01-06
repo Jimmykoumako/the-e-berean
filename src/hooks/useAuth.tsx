@@ -12,6 +12,7 @@ import {
     Session
 } from '@supabase/supabase-js';
 import { toast } from 'react-hot-toast';
+import {useToast} from "@/hooks/use-toast";
 
 // More robust type definitions
 interface AuthUser extends User {
@@ -36,6 +37,7 @@ interface AuthContextType extends AuthState {
     signOut: () => Promise<void>;
     resetPassword: (email: string) => Promise<boolean>;
     updateProfile: (data: Partial<AuthUser>) => Promise<boolean>;
+    refreshSession: () => Promise<void>;
 }
 
 // Create context with initial undefined value
@@ -48,8 +50,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         loading: true,
         error: null,
     });
+    const [sessions, setSession] = useState(null)
 
     const navigate = useNavigate();
+    // const { toast } = useToast();
 
     // Centralized state update method
     const updateAuthState = (updates: Partial<AuthState>) => {
@@ -60,73 +64,111 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }));
     };
 
-    // Initialize and track authentication state
+    // Improved session management
     useEffect(() => {
-        // Fetch initial session
-        const initializeAuth = async () => {
-            const { data: { session } } = await supabase.auth.getSession();
+        // Initial session check
+        supabase.auth.getSession().then(({ data: { session } }) => {
+            console.log("session")
+            console.log(session)
 
-            if (session?.user) {
-                await fetchUserProfile(session.user);
-            } else {
-                updateAuthState({
-                    user: null,
-                    session: null,
-                    error: null
-                });
-            }
-        };
+        })
+
+        setTimeout(()=> {
+            console.log("Waiting...")
+            console.log(state)
+        }, 10000)
 
         // Listen for auth changes
-        const { data: { subscription } } = supabase.auth.onAuthStateChange(
-            async (event, session) => {
-                if (event === 'SIGNED_IN' && session?.user) {
-                    await fetchUserProfile(session.user);
-                } else if (event === 'SIGNED_OUT') {
-                    updateAuthState({
+        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+            switch (event) {
+                case 'SIGNED_IN':
+                    if (session) {
+                        await fetchUserProfile(session.user.id);
+                        setState(prev => ({
+                            ...prev,
+                            user: session.user as AuthUser,
+                            session,
+                            loading: false
+                        }));
+                    }
+                    break;
+                case 'SIGNED_OUT':
+                    setState({
                         user: null,
                         session: null,
+                        loading: false,
                         error: null
                     });
-                }
+                    navigate('/');
+                    break;
+                case 'TOKEN_REFRESHED':
+                    if (session) {
+                        setState(prev => ({
+                            ...prev,
+                            session,
+                            loading: false
+                        }));
+                    }
+                    break;
+                default:
+                    if (session) {
+                        setState(prev => ({
+                            ...prev,
+                            session,
+                            loading: false
+                        }));
+                    }
+                    break;
             }
-        );
-
-        initializeAuth();
+        });
 
         // Cleanup subscription
         return () => {
             subscription.unsubscribe();
         };
-    }, []);
+    }, [navigate]);
 
     // Fetch and update user profile
-    async function fetchUserProfile(authUser: User) {
-        try {
-            const { data, error } = await supabase
-                .from('users')
-                .select('username, display_name, avatar_url')
-                .eq('id', authUser.id)
-                .single();
+    // Fetch user profile
+    async function fetchUserProfile(userId: string) {
+        const { data, error } = await supabase
+            .from('users')
+            .select('username, display_name, avatar_url')
+            .eq('id', userId)
+            .single();
 
-            if (error) throw error;
-
-            updateAuthState({
-                user: {
-                    ...authUser,
-                    ...data
-                },
-                session: await supabase.auth.getSession().then(res => res.data.session),
-                error: null
-            });
-        } catch (error) {
-            updateAuthState({
-                user: null,
-                session: null,
-                error: error instanceof Error ? error.message : 'Profile fetch failed'
-            });
+        if (error) {
+            setState(prev => ({
+                ...prev,
+                error,
+                loading: false
+            } as AuthState));
+            return;
         }
+
+        setState(prev => ({
+            ...prev,
+            user: {
+                ...prev.user,
+                ...data
+            } as AuthUser,
+            loading: false,
+            error: null
+        }));
     }
+
+    // Refresh session manually
+    const refreshSession = async () => {
+        const { data: { session } } = await supabase.auth.refreshSession();
+
+        if (session) {
+            setState(prev => ({
+                ...prev,
+                session,
+                user: session.user as AuthUser
+            }));
+        }
+    };
 
     // Sign Up Method
     const signUp = async (
@@ -171,14 +213,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
             if (profileError) throw profileError;
 
-            toast.success('Account created successfully');
-            return { success: true };
+            // toast.('Account created successfully');
+            return { success: true, user: authData.user };
         } catch (error) {
             const errorMessage = error instanceof Error
                 ? error.message
                 : 'Signup failed';
 
-            toast.error(errorMessage);
+            // toast.error(errorMessage);
+            console.error('Signup Error:', error);
             return {
                 success: false,
                 error: errorMessage
@@ -190,7 +233,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const signIn = async (identifier: string, password: string) => {
         try {
             const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier);
-
+            console.log("Is is an email:",isEmail)
             let emailToUse = identifier;
 
             // Handle username-based login
@@ -209,18 +252,46 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 emailToUse = userData.email;
             }
 
-            // Authenticate
-            const { error } = await supabase.auth.signInWithPassword({
+            console.log("Attempt to sign in")
+            // Attempt to sign in
+            const { data, error } = await supabase.auth.signInWithPassword({
                 email: emailToUse,
                 password
-            });
+            }).then(res=> console.log(res));
+
+            console.log("After sign in: data", data)
+            console.log("After sign in: error", error)
 
             if (error) {
                 toast.error(error.message);
                 return false;
             }
 
+            // Verify user exists
+            if (!data.user) {
+                throw new Error('Authentication failed');
+            }
+
+
+            // Optional: Additional verification
+            const { data: userProfile, error: profileError } = await supabase
+                .from('users')
+                .select('*')
+                .eq('id', data.user.id)
+                .single();
+
+            if (profileError) {
+                throw new Error('Could not retrieve user profile');
+            }
+
+            // // Success toast
+            // toast({
+            //     title: "Welcome back!",
+            //     description: `Signed in as ${identifier}`,
+            // });
+
             toast.success(`Welcome back, ${identifier}`);
+            setState(prevState => ({ ...prevState, loading: false}))
             navigate('/bible');
             return true;
         } catch (error) {
@@ -281,15 +352,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
     };
 
+    const contextValue: AuthContextType = {
+        ...state,
+        signUp,
+        signIn,
+        signOut,
+        resetPassword,
+        updateProfile,
+        refreshSession
+    };
+
     return (
-        <AuthContext.Provider value={{
-            ...state,
-            signUp,
-            signIn,
-            signOut,
-            resetPassword,
-            updateProfile,
-        }}>
+        <AuthContext.Provider value={contextValue}>
             {children}
         </AuthContext.Provider>
     );
