@@ -5,20 +5,34 @@ import {
     useContext
 } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { supabase } from '../../supabaseClient';
 import {
     User,
     AuthError,
     Session
 } from '@supabase/supabase-js';
-import { toast } from 'react-hot-toast';
-import {useToast} from "@/hooks/use-toast";
+import { useToast } from "@/hooks/use-toast"
+import {supabase} from "../../supabaseClient";
 
-// More robust type definitions
+// Enhanced user interface for Bible study features
 interface AuthUser extends User {
     username?: string;
     display_name?: string;
     avatar_url?: string;
+    preferences?: {
+        defaultBibleVersion?: string;
+        fontSize?: number;
+        theme?: 'light' | 'dark';
+        notifications?: boolean;
+    };
+    reading_progress?: {
+        lastRead?: {
+            book: string;
+            chapter: number;
+            verse: number;
+        };
+        readingStreak?: number;
+        completedPlans?: string[];
+    };
 }
 
 interface AuthState {
@@ -26,36 +40,37 @@ interface AuthState {
     session: Session | null;
     loading: boolean;
     error: string | null;
+    initialized: boolean;
 }
 
 interface AuthContextType extends AuthState {
     signUp: (email: string, password: string, username: string) => Promise<{
         success: boolean;
-        error?: string
+        error?: string;
     }>;
     signIn: (identifier: string, password: string) => Promise<boolean>;
     signOut: () => Promise<void>;
     resetPassword: (email: string) => Promise<boolean>;
     updateProfile: (data: Partial<AuthUser>) => Promise<boolean>;
     refreshSession: () => Promise<void>;
+    updateReadingProgress: (progress: typeof AuthUser.reading_progress) => Promise<boolean>;
+    updatePreferences: (preferences: typeof AuthUser.preferences) => Promise<boolean>;
 }
 
-// Create context with initial undefined value
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [state, setState] = useState<AuthState>({
         user: null,
         session: null,
-        loading: true,
+        loading: false,
         error: null,
+        initialized: false
     });
-    const [sessions, setSession] = useState(null)
 
     const navigate = useNavigate();
-    // const { toast } = useToast();
-
-    // Centralized state update method
+    const { toast } = useToast()
+    // Enhanced state update method with type safety
     const updateAuthState = (updates: Partial<AuthState>) => {
         setState(prevState => ({
             ...prevState,
@@ -64,120 +79,112 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }));
     };
 
-    // Improved session management
     useEffect(() => {
-        // Initial session check
+        let refreshTimer: NodeJS.Timeout;
+
+        if (state.session?.expires_at) {
+            const expiryTime = new Date(state.session.expires_at).getTime();
+            const timeToExpiry = expiryTime - Date.now();
+            const refreshBuffer = 5 * 60 * 1000; // 5 minutes before expiry
+
+            if (timeToExpiry > 0) {
+                refreshTimer = setTimeout(() => {
+                    refreshSession();
+                }, timeToExpiry - refreshBuffer);
+            }
+        }
+
+        return () => {
+            if (refreshTimer) {
+                clearTimeout(refreshTimer);
+            }
+        };
+    }, [state.session?.expires_at]);
+
+    useEffect(() => {
+        refreshSession()
+        // Initial session and persistence setup
         supabase.auth.getSession().then(({ data: { session } }) => {
-            console.log("session")
-            console.log(session)
+            if (session) {
+                fetchUserProfile(session.user.id);
+                // Set up session persistence
+                supabase.auth.setSession({
+                    access_token: session.access_token,
+                    refresh_token: session.refresh_token
+                });
+            }
+            setState(prev => ({
+                ...prev,
+                session,
+                initialized: true,
+                loading: false
+            }));
+        });
 
-        })
-
-        setTimeout(()=> {
-            console.log("Waiting...")
-            console.log(state)
-        }, 10000)
-
-        // Listen for auth changes
+        // Enhanced auth state change listener
         const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-            switch (event) {
-                case 'SIGNED_IN':
-                    if (session) {
-                        await fetchUserProfile(session.user.id);
-                        setState(prev => ({
-                            ...prev,
-                            user: session.user as AuthUser,
-                            session,
-                            loading: false
-                        }));
-                    }
-                    break;
-                case 'SIGNED_OUT':
-                    setState({
-                        user: null,
-                        session: null,
-                        loading: false,
-                        error: null
+            if (event === 'SIGNED_IN') {
+                if (session) {
+                    await fetchUserProfile(session.user.id);
+                    updateAuthState({
+                        user: session.user as AuthUser,
+                        session,
+                        loading: false
                     });
-                    navigate('/');
-                    break;
-                case 'TOKEN_REFRESHED':
-                    if (session) {
-                        setState(prev => ({
-                            ...prev,
-                            session,
-                            loading: false
-                        }));
-                    }
-                    break;
-                default:
-                    if (session) {
-                        setState(prev => ({
-                            ...prev,
-                            session,
-                            loading: false
-                        }));
-                    }
-                    break;
+                }
+            } else if (event === 'SIGNED_OUT') {
+                updateAuthState({
+                    user: null,
+                    session: null,
+                    error: null
+                });
+                navigate('/');
+            } else {
+                updateAuthState({
+                    user: null,
+                    session: null,
+                    error: null
+                });
+                navigate('/');
             }
         });
 
-        // Cleanup subscription
         return () => {
             subscription.unsubscribe();
         };
     }, [navigate]);
 
-    // Fetch and update user profile
-    // Fetch user profile
+    // Enhanced user profile fetching with Bible study specific data
     async function fetchUserProfile(userId: string) {
         const { data, error } = await supabase
             .from('users')
-            .select('username, display_name, avatar_url')
+            .select(`
+                username,
+                display_name,
+                avatar_url,
+                preferences,
+                reading_progress
+            `)
             .eq('id', userId)
             .single();
 
         if (error) {
-            setState(prev => ({
-                ...prev,
-                error,
-                loading: false
-            } as AuthState));
+            updateAuthState({ error: error.message });
             return;
         }
 
-        setState(prev => ({
-            ...prev,
+        updateAuthState({
             user: {
-                ...prev.user,
+                ...state.user,
                 ...data
             } as AuthUser,
-            loading: false,
-            error: null
-        }));
+            loading: false
+        });
     }
 
-    // Refresh session manually
-    const refreshSession = async () => {
-        const { data: { session } } = await supabase.auth.refreshSession();
-
-        if (session) {
-            setState(prev => ({
-                ...prev,
-                session,
-                user: session.user as AuthUser
-            }));
-        }
-    };
-
-    // Sign Up Method
-    const signUp = async (
-        email: string,
-        password: string,
-        username: string
-    ) => {
+    // Enhanced sign up with initial Bible study preferences
+    const signUp = async (email: string, password: string, username: string) => {
         try {
-            // Check username uniqueness
             const { data: existingUser } = await supabase
                 .from('users')
                 .select('username')
@@ -191,7 +198,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 };
             }
 
-            // Create auth user
             const { data: authData, error: authError } = await supabase.auth.signUp({
                 email,
                 password,
@@ -203,40 +209,49 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             if (authError) throw authError;
             if (!authData.user) throw new Error('No user created');
 
-            // Insert user profile
+            // Initialize user profile with Bible study preferences
             const { error: profileError } = await supabase.from('users').insert({
                 id: authData.user.id,
                 username,
                 email,
-                created_at: new Date().toISOString(),
+                preferences: {
+                    defaultBibleVersion: 'KJV',
+                    fontSize: 16,
+                    theme: 'light',
+                    notifications: true
+                },
+                reading_progress: {
+                    readingStreak: 0,
+                    completedPlans: []
+                },
+                created_at: new Date().toISOString()
             });
 
             if (profileError) throw profileError;
 
-            // toast.('Account created successfully');
-            return { success: true, user: authData.user };
-        } catch (error) {
-            const errorMessage = error instanceof Error
-                ? error.message
-                : 'Signup failed';
+            toast({
+                title: "Success!",
+                description: "Your account has been created."
+            });
 
-            // toast.error(errorMessage);
-            console.error('Signup Error:', error);
-            return {
-                success: false,
-                error: errorMessage
-            };
+            return { success: true };
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : 'Signup failed';
+            toast({
+                title: "Error",
+                description: errorMessage,
+                variant: "destructive"
+            });
+            return { success: false, error: errorMessage };
         }
     };
 
-    // Sign In Method
+    // Enhanced sign in with last read position recovery
     const signIn = async (identifier: string, password: string) => {
         try {
-            const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier);
-            console.log("Is is an email:",isEmail)
+            const isEmail = identifier.includes('@');
             let emailToUse = identifier;
 
-            // Handle username-based login
             if (!isEmail) {
                 const { data: userData } = await supabase
                     .from('users')
@@ -245,113 +260,250 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     .single();
 
                 if (!userData) {
-                    toast.error('Username not found');
+                    toast({
+                        title: "Error",
+                        description: "Username not found",
+                        variant: "destructive"
+                    });
                     return false;
                 }
-
                 emailToUse = userData.email;
             }
 
-            console.log("Attempt to sign in")
-            // Attempt to sign in
             const { data, error } = await supabase.auth.signInWithPassword({
                 email: emailToUse,
                 password
-            }).then(res=> console.log(res));
+            });
 
-            console.log("After sign in: data", data)
-            console.log("After sign in: error", error)
+            if (error) throw error;
 
-            if (error) {
-                toast.error(error.message);
-                return false;
-            }
-
-            // Verify user exists
-            if (!data.user) {
-                throw new Error('Authentication failed');
-            }
-
-
-            // Optional: Additional verification
-            const { data: userProfile, error: profileError } = await supabase
+            const { data: userProfile } = await supabase
                 .from('users')
                 .select('*')
                 .eq('id', data.user.id)
                 .single();
 
-            if (profileError) {
-                throw new Error('Could not retrieve user profile');
+            if (userProfile?.reading_progress?.lastRead) {
+                // Navigate to last read position
+                navigate(`/bible/${userProfile.reading_progress.lastRead.book}/${userProfile.reading_progress.lastRead.chapter}`);
+            } else {
+                navigate('/bible');
             }
 
-            // // Success toast
-            // toast({
-            //     title: "Welcome back!",
-            //     description: `Signed in as ${identifier}`,
-            // });
+            toast({
+                title: "Welcome back!",
+                description: `Signed in as ${identifier}`
+            });
 
-            toast.success(`Welcome back, ${identifier}`);
-            setState(prevState => ({ ...prevState, loading: false}))
-            navigate('/bible');
             return true;
         } catch (error) {
-            toast.error('Sign in failed');
+            toast({
+                title: "Error",
+                description: "Sign in failed",
+                variant: "destructive"
+            });
             return false;
         }
     };
 
-    // Sign Out Method
-    const signOut = async () => {
+    // Additional Bible study specific methods
+    const updateReadingProgress = async (progress: typeof AuthUser.reading_progress) => {
         try {
-            await supabase.auth.signOut();
-            navigate('/');
-            toast.success('Signed out successfully');
+            if (!state.user?.id) return false;
+
+            const { error } = await supabase
+                .from('users')
+                .update({
+                    reading_progress: progress
+                })
+                .eq('id', state.user.id);
+
+            if (error) throw error;
+            return true;
         } catch (error) {
-            toast.error('Sign out failed');
+            toast({
+                title: "Error",
+                description: "Failed to update reading progress",
+                variant: "destructive"
+            });
+            return false;
         }
     };
 
-    // Reset Password Method
+    const updatePreferences = async (preferences: typeof AuthUser.preferences) => {
+        try {
+            if (!state.user?.id) return false;
+
+            const { error } = await supabase
+                .from('users')
+                .update({
+                    preferences
+                })
+                .eq('id', state.user.id);
+
+            if (error) throw error;
+            return true;
+        } catch (error) {
+            toast({
+                title: "Error",
+                description: "Failed to update preferences",
+                variant: "destructive"
+            });
+            return false;
+        }
+    };
+
+    // Sign out method
+    const signOut = async () => {
+        try {
+            const { error } = await supabase.auth.signOut();
+            if (error) throw error;
+
+            // Clear any local storage or state
+            updateAuthState({
+                user: null,
+                session: null,
+                error: null,
+                loading: false
+            });
+
+            toast({
+                title: "Signed out successfully",
+                description: "You have been logged out."
+            });
+
+            navigate('/');
+        } catch (error) {
+            toast({
+                title: "Error",
+                description: "Failed to sign out",
+                variant: "destructive"
+            });
+        }
+    };
+
+    // Reset password method
     const resetPassword = async (email: string) => {
         try {
             const { error } = await supabase.auth.resetPasswordForEmail(email, {
-                redirectTo: `${window.location.origin}/reset-password`,
+                redirectTo: `${window.location.origin}/reset-password`
             });
 
             if (error) throw error;
 
-            toast.success('Password reset email sent');
+            toast({
+                title: "Password reset email sent",
+                description: "Check your email for the reset link"
+            });
+
             return true;
         } catch (error) {
-            toast.error('Password reset failed');
+            toast({
+                title: "Error",
+                description: "Failed to send reset email",
+                variant: "destructive"
+            });
             return false;
         }
     };
 
-    // Update Profile Method
+    // Update profile method
     const updateProfile = async (data: Partial<AuthUser>) => {
         try {
             if (!state.user?.id) {
-                toast.error('No user logged in');
-                return false;
+                throw new Error('No user logged in');
             }
 
-            const { error } = await supabase
+            // Update auth data if email is being changed
+            if (data.email) {
+                const { error: emailError } = await supabase.auth.updateUser({
+                    email: data.email
+                });
+                if (emailError) throw emailError;
+            }
+
+            // Update profile data in the users table
+            const { error: profileError } = await supabase
                 .from('users')
-                .update(data)
+                .update({
+                    username: data.username,
+                    display_name: data.display_name,
+                    avatar_url: data.avatar_url,
+                    updated_at: new Date().toISOString()
+                })
                 .eq('id', state.user.id);
 
-            if (error) throw error;
+            if (profileError) throw profileError;
 
-            await fetchUserProfile(state.user);
-            toast.success('Profile updated successfully');
+            // Refresh user data
+            await fetchUserProfile(state.user.id);
+
+            toast({
+                title: "Profile updated",
+                description: "Your profile has been updated successfully"
+            });
+
             return true;
         } catch (error) {
-            toast.error('Profile update failed');
+            toast({
+                title: "Error",
+                description: error instanceof Error ? error.message : "Failed to update profile",
+                variant: "destructive"
+            });
             return false;
         }
     };
 
+    // Refresh session method
+    const refreshSession = async () => {
+        try {
+            // First try to get session from localStorage
+            const { data: { session: storedSession } } = await supabase.auth.getSession();
+
+            if (storedSession) {
+                // If we have a stored session, try to refresh it
+                const { data: { session }, error } = await supabase.auth.refreshSession({
+                    refresh_token: storedSession.refresh_token
+                });
+
+                if (error) throw error;
+
+                if (session) {
+                    // Store the new tokens
+                    await supabase.auth.setSession({
+                        access_token: session.access_token,
+                        refresh_token: session.refresh_token
+                    });
+
+                    await fetchUserProfile(session.user.id);
+                    updateAuthState({
+                        user: session.user as AuthUser,
+                        session,
+                        loading: false
+                    });
+                    return;
+                }
+            }
+
+            // If we get here, no valid session exists
+            updateAuthState({
+                user: null,
+                session: null,
+                loading: false,
+                error: 'No valid session'
+            });
+            navigate('/login');
+        } catch (error) {
+            console.error('Session refresh failed:', error);
+            updateAuthState({
+                user: null,
+                session: null,
+                loading: false,
+                error: 'Session expired'
+            });
+            navigate('/login');
+        }
+    };
     const contextValue: AuthContextType = {
         ...state,
         signUp,
@@ -359,7 +511,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         signOut,
         resetPassword,
         updateProfile,
-        refreshSession
+        refreshSession,
+        updateReadingProgress,
+        updatePreferences
     };
 
     return (
@@ -369,7 +523,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     );
 }
 
-// Custom hook for using auth context
 export const useAuth = () => {
     const context = useContext(AuthContext);
     if (context === undefined) {
