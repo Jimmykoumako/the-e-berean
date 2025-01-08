@@ -1,201 +1,184 @@
-import {
-    useState,
-    useEffect,
-    createContext,
-    useContext
-} from 'react';
-import { useNavigate } from 'react-router-dom';
-import {
-    User,
-    AuthError,
-    Session
-} from '@supabase/supabase-js';
-import { useToast } from "@/hooks/use-toast"
-import {supabase} from "../../supabaseClient";
+// src/contexts/auth/types.ts
+import { User, Session } from '@supabase/supabase-js'
 
-// Enhanced user interface for Bible study features
-interface AuthUser extends User {
-    username?: string;
-    display_name?: string;
-    avatar_url?: string;
-    preferences?: {
-        defaultBibleVersion?: string;
-        fontSize?: number;
-        theme?: 'light' | 'dark';
-        notifications?: boolean;
-    };
-    reading_progress?: {
-        lastRead?: {
-            book: string;
-            chapter: number;
-            verse: number;
-        };
-        readingStreak?: number;
-        completedPlans?: string[];
-    };
+export interface UserPreferences {
+    defaultBibleVersion?: string
+    fontSize?: number
+    theme?: 'light' | 'dark'
+    notifications?: boolean
 }
 
-interface AuthState {
-    user: AuthUser | null;
-    session: Session | null;
-    loading: boolean;
-    error: string | null;
-    initialized: boolean;
+export interface ReadingProgress {
+    lastRead?: {
+        book: string
+        chapter: number
+        verse?: number
+    }
+    readingStreak?: number
+    completedPlans?: string[]
 }
 
-interface AuthContextType extends AuthState {
+export interface AuthUser extends User {
+    username?: string
+    display_name?: string
+    avatar_url?: string
+    preferences?: UserPreferences
+    reading_progress?: ReadingProgress
+}
+
+export interface AuthState {
+    user: AuthUser | null
+    session: Session | null
+    loading: boolean
+    error: string | null
+    initialized: boolean
+}
+
+export interface AuthContextType extends AuthState {
     signUp: (email: string, password: string, username: string) => Promise<{
-        success: boolean;
-        error?: string;
-    }>;
-    signIn: (identifier: string, password: string) => Promise<boolean>;
-    signOut: () => Promise<void>;
-    resetPassword: (email: string) => Promise<boolean>;
-    updateProfile: (data: Partial<AuthUser>) => Promise<boolean>;
-    refreshSession: () => Promise<void>;
-    updateReadingProgress: (progress: typeof AuthUser.reading_progress) => Promise<boolean>;
-    updatePreferences: (preferences: typeof AuthUser.preferences) => Promise<boolean>;
+        success: boolean
+        error?: string
+    }>
+    signIn: (identifier: string, password: string) => Promise<boolean>
+    signOut: () => Promise<void>
+    resetPassword: (email: string) => Promise<boolean>
+    updateProfile: (data: Partial<AuthUser>) => Promise<boolean>
+    refreshSession: () => Promise<void>
+    updateReadingProgress: (progress: ReadingProgress) => Promise<boolean>
+    updatePreferences: (preferences: UserPreferences) => Promise<boolean>
 }
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+// src/contexts/auth/AuthContext.tsx
+import {
+    createContext,
+    useContext,
+    useEffect,
+    useState,
+    useCallback,
+    useRef
+} from 'react'
+import { useNavigate } from 'react-router-dom'
+import { useToast } from "@/hooks/use-toast"
+import {supabase, testSupabaseConnection} from "../../supabaseClient";
+// import type { AuthContextType, AuthState, AuthUser, UserPreferences, ReadingProgress } from './types'
+
+const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [state, setState] = useState<AuthState>({
         user: null,
         session: null,
-        loading: false,
+        loading: true,
         error: null,
         initialized: false
-    });
+    })
 
-    const navigate = useNavigate();
+    const navigate = useNavigate()
     const { toast } = useToast()
-    // Enhanced state update method with type safety
-    const updateAuthState = (updates: Partial<AuthState>) => {
-        setState(prevState => ({
-            ...prevState,
+    const refreshTimerRef = useRef<NodeJS.Timeout>()
+
+    const updateAuthState = useCallback((updates: Partial<AuthState>) => {
+        setState(prev => ({
+            ...prev,
             ...updates,
             loading: false
-        }));
-    };
+        }))
+    }, [])
 
-    useEffect(() => {
-        let refreshTimer: NodeJS.Timeout;
+    const fetchUserProfile = useCallback(async (userId: string) => {
+        try {
+            const { data, error } = await supabase
+                .from('users')
+                .select(`
+                    username,
+                    display_name,
+                    avatar_url,
+                    preferences,
+                    reading_progress
+                `)
+                .eq('id', userId)
+                .single()
 
-        if (state.session?.expires_at) {
-            const expiryTime = new Date(state.session.expires_at).getTime();
-            const timeToExpiry = expiryTime - Date.now();
-            const refreshBuffer = 5 * 60 * 1000; // 5 minutes before expiry
+            if (error) throw error
 
-            if (timeToExpiry > 0) {
-                refreshTimer = setTimeout(() => {
-                    refreshSession();
-                }, timeToExpiry - refreshBuffer);
-            }
+            updateAuthState({
+                user: {
+                    ...state.user,
+                    ...data
+                } as AuthUser
+            })
+        } catch (error) {
+            console.error('Error fetching user profile:', error)
+            updateAuthState({
+                error: 'Failed to fetch user profile'
+            })
+        }
+    }, [state.user, updateAuthState])
+
+    const setupSessionRefreshTimer = useCallback((session: Session) => {
+        // Clear any existing timer
+        if (refreshTimerRef.current) {
+            clearTimeout(refreshTimerRef.current)
         }
 
-        return () => {
-            if (refreshTimer) {
-                clearTimeout(refreshTimer);
-            }
-        };
-    }, [state.session?.expires_at]);
+        if (session?.expires_at) {
+            const expiryTime = new Date(session.expires_at).getTime()
+            const timeToExpiry = expiryTime - Date.now()
+            const refreshBuffer = 5 * 60 * 1000 // 5 minutes before expiry
 
-    useEffect(() => {
-        refreshSession()
-        // Initial session and persistence setup
-        supabase.auth.getSession().then(({ data: { session } }) => {
+            if (timeToExpiry > 0) {
+                refreshTimerRef.current = setTimeout(() => {
+                    refreshSession()
+                }, timeToExpiry - refreshBuffer)
+            }
+        }
+    }, [])
+
+    const refreshSession = useCallback(async () => {
+        try {
+            const { data: { session }, error } = await supabase.auth.refreshSession()
+
+            if (error) throw error
+
             if (session) {
-                fetchUserProfile(session.user.id);
-                // Set up session persistence
-                supabase.auth.setSession({
-                    access_token: session.access_token,
-                    refresh_token: session.refresh_token
-                });
-            }
-            setState(prev => ({
-                ...prev,
-                session,
-                initialized: true,
-                loading: false
-            }));
-        });
-
-        // Enhanced auth state change listener
-        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-            if (event === 'SIGNED_IN') {
-                if (session) {
-                    await fetchUserProfile(session.user.id);
-                    updateAuthState({
-                        user: session.user as AuthUser,
-                        session,
-                        loading: false
-                    });
-                }
-            } else if (event === 'SIGNED_OUT') {
+                await fetchUserProfile(session.user.id)
                 updateAuthState({
-                    user: null,
-                    session: null,
-                    error: null
-                });
-                navigate('/');
+                    user: session.user as AuthUser,
+                    session
+                })
+                setupSessionRefreshTimer(session)
             } else {
                 updateAuthState({
                     user: null,
                     session: null,
-                    error: null
-                });
-                navigate('/');
+                    error: 'No valid session'
+                })
+                navigate('/login')
             }
-        });
-
-        return () => {
-            subscription.unsubscribe();
-        };
-    }, [navigate]);
-
-    // Enhanced user profile fetching with Bible study specific data
-    async function fetchUserProfile(userId: string) {
-        const { data, error } = await supabase
-            .from('users')
-            .select(`
-                username,
-                display_name,
-                avatar_url,
-                preferences,
-                reading_progress
-            `)
-            .eq('id', userId)
-            .single();
-
-        if (error) {
-            updateAuthState({ error: error.message });
-            return;
+        } catch (error) {
+            console.error('Session refresh failed:', error)
+            updateAuthState({
+                user: null,
+                session: null,
+                error: 'Session expired'
+            })
+            navigate('/login')
         }
+    }, [fetchUserProfile, navigate, setupSessionRefreshTimer, updateAuthState])
 
-        updateAuthState({
-            user: {
-                ...state.user,
-                ...data
-            } as AuthUser,
-            loading: false
-        });
-    }
-
-    // Enhanced sign up with initial Bible study preferences
     const signUp = async (email: string, password: string, username: string) => {
         try {
             const { data: existingUser } = await supabase
                 .from('users')
                 .select('username')
                 .eq('username', username)
-                .single();
+                .single()
 
             if (existingUser) {
                 return {
                     success: false,
                     error: 'Username already exists'
-                };
+                }
             }
 
             const { data: authData, error: authError } = await supabase.auth.signUp({
@@ -204,12 +187,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 options: {
                     data: { username }
                 }
-            });
+            })
 
-            if (authError) throw authError;
-            if (!authData.user) throw new Error('No user created');
+            if (authError) throw authError
+            if (!authData.user) throw new Error('No user created')
 
-            // Initialize user profile with Bible study preferences
             const { error: profileError } = await supabase.from('users').insert({
                 id: authData.user.id,
                 username,
@@ -223,206 +205,163 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 reading_progress: {
                     readingStreak: 0,
                     completedPlans: []
-                },
-                created_at: new Date().toISOString()
-            });
+                }
+            })
 
-            if (profileError) throw profileError;
+            if (profileError) throw profileError
 
             toast({
                 title: "Success!",
                 description: "Your account has been created."
-            });
+            })
 
-            return { success: true };
+            return { success: true }
         } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : 'Signup failed';
+            const errorMessage = error instanceof Error ? error.message : 'Signup failed'
             toast({
                 title: "Error",
                 description: errorMessage,
                 variant: "destructive"
-            });
-            return { success: false, error: errorMessage };
+            })
+            return { success: false, error: errorMessage }
         }
-    };
+    }
 
-    // Enhanced sign in with last read position recovery
     const signIn = async (identifier: string, password: string) => {
         try {
-            const isEmail = identifier.includes('@');
-            let emailToUse = identifier;
+            updateAuthState({ loading: true })
+            const isEmail = identifier.includes('@')
+            let emailToUse = identifier
 
             if (!isEmail) {
-                const { data: userData } = await supabase
+                const { data: userData, error: userError } = await supabase
                     .from('users')
                     .select('email')
                     .eq('username', identifier)
-                    .single();
+                    .single()
 
-                if (!userData) {
+                if (userError || !userData) {
                     toast({
                         title: "Error",
                         description: "Username not found",
                         variant: "destructive"
-                    });
-                    return false;
+                    })
+                    return false
                 }
-                emailToUse = userData.email;
+                emailToUse = userData.email
             }
 
             const { data, error } = await supabase.auth.signInWithPassword({
                 email: emailToUse,
                 password
-            });
+            })
 
-            if (error) throw error;
+            if (error) throw error
+
+            if (data.session) {
+                setupSessionRefreshTimer(data.session)
+            }
 
             const { data: userProfile } = await supabase
                 .from('users')
                 .select('*')
                 .eq('id', data.user.id)
-                .single();
+                .single()
+
+            updateAuthState({
+                user: { ...data.user, ...userProfile } as AuthUser,
+                session: data.session
+            })
 
             if (userProfile?.reading_progress?.lastRead) {
-                // Navigate to last read position
-                navigate(`/bible/${userProfile.reading_progress.lastRead.book}/${userProfile.reading_progress.lastRead.chapter}`);
+                navigate(`/bible/${userProfile.reading_progress.lastRead.book}/${userProfile.reading_progress.lastRead.chapter}`)
             } else {
-                navigate('/bible');
+                navigate('/bible')
             }
 
             toast({
                 title: "Welcome back!",
                 description: `Signed in as ${identifier}`
-            });
+            })
 
-            return true;
+            return true
         } catch (error) {
             toast({
                 title: "Error",
-                description: "Sign in failed",
+                description: error instanceof Error ? error.message : "Sign in failed",
                 variant: "destructive"
-            });
-            return false;
+            })
+            return false
         }
-    };
+    }
 
-    // Additional Bible study specific methods
-    const updateReadingProgress = async (progress: typeof AuthUser.reading_progress) => {
-        try {
-            if (!state.user?.id) return false;
-
-            const { error } = await supabase
-                .from('users')
-                .update({
-                    reading_progress: progress
-                })
-                .eq('id', state.user.id);
-
-            if (error) throw error;
-            return true;
-        } catch (error) {
-            toast({
-                title: "Error",
-                description: "Failed to update reading progress",
-                variant: "destructive"
-            });
-            return false;
-        }
-    };
-
-    const updatePreferences = async (preferences: typeof AuthUser.preferences) => {
-        try {
-            if (!state.user?.id) return false;
-
-            const { error } = await supabase
-                .from('users')
-                .update({
-                    preferences
-                })
-                .eq('id', state.user.id);
-
-            if (error) throw error;
-            return true;
-        } catch (error) {
-            toast({
-                title: "Error",
-                description: "Failed to update preferences",
-                variant: "destructive"
-            });
-            return false;
-        }
-    };
-
-    // Sign out method
     const signOut = async () => {
         try {
-            const { error } = await supabase.auth.signOut();
-            if (error) throw error;
+            const { error } = await supabase.auth.signOut()
+            if (error) throw error
 
-            // Clear any local storage or state
+            if (refreshTimerRef.current) {
+                clearTimeout(refreshTimerRef.current)
+            }
+
             updateAuthState({
                 user: null,
                 session: null,
-                error: null,
-                loading: false
-            });
+                error: null
+            })
 
             toast({
                 title: "Signed out successfully",
                 description: "You have been logged out."
-            });
+            })
 
-            navigate('/');
+            navigate('/login')
         } catch (error) {
             toast({
                 title: "Error",
                 description: "Failed to sign out",
                 variant: "destructive"
-            });
+            })
         }
-    };
+    }
 
-    // Reset password method
     const resetPassword = async (email: string) => {
         try {
             const { error } = await supabase.auth.resetPasswordForEmail(email, {
                 redirectTo: `${window.location.origin}/reset-password`
-            });
+            })
 
-            if (error) throw error;
+            if (error) throw error
 
             toast({
                 title: "Password reset email sent",
                 description: "Check your email for the reset link"
-            });
+            })
 
-            return true;
+            return true
         } catch (error) {
             toast({
                 title: "Error",
                 description: "Failed to send reset email",
                 variant: "destructive"
-            });
-            return false;
+            })
+            return false
         }
-    };
+    }
 
-    // Update profile method
     const updateProfile = async (data: Partial<AuthUser>) => {
         try {
             if (!state.user?.id) {
-                throw new Error('No user logged in');
+                throw new Error('No user logged in')
             }
 
-            // Update auth data if email is being changed
             if (data.email) {
                 const { error: emailError } = await supabase.auth.updateUser({
                     email: data.email
-                });
-                if (emailError) throw emailError;
+                })
+                if (emailError) throw emailError
             }
 
-            // Update profile data in the users table
             const { error: profileError } = await supabase
                 .from('users')
                 .update({
@@ -431,79 +370,135 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     avatar_url: data.avatar_url,
                     updated_at: new Date().toISOString()
                 })
-                .eq('id', state.user.id);
+                .eq('id', state.user.id)
 
-            if (profileError) throw profileError;
+            if (profileError) throw profileError
 
-            // Refresh user data
-            await fetchUserProfile(state.user.id);
+            await fetchUserProfile(state.user.id)
 
             toast({
                 title: "Profile updated",
                 description: "Your profile has been updated successfully"
-            });
+            })
 
-            return true;
+            return true
         } catch (error) {
             toast({
                 title: "Error",
                 description: error instanceof Error ? error.message : "Failed to update profile",
                 variant: "destructive"
-            });
-            return false;
+            })
+            return false
         }
-    };
+    }
 
-    // Refresh session method
-    const refreshSession = async () => {
+    const updateReadingProgress = async (progress: ReadingProgress) => {
         try {
-            // First try to get session from localStorage
-            const { data: { session: storedSession } } = await supabase.auth.getSession();
+            if (!state.user?.id) return false
 
-            if (storedSession) {
-                // If we have a stored session, try to refresh it
-                const { data: { session }, error } = await supabase.auth.refreshSession({
-                    refresh_token: storedSession.refresh_token
-                });
+            const { error } = await supabase
+                .from('users')
+                .update({
+                    reading_progress: progress
+                })
+                .eq('id', state.user.id)
 
-                if (error) throw error;
+            if (error) throw error
 
+            updateAuthState({
+                user: {
+                    ...state.user,
+                    reading_progress: progress
+                }
+            })
+
+            return true
+        } catch (error) {
+            toast({
+                title: "Error",
+                description: "Failed to update reading progress",
+                variant: "destructive"
+            })
+            return false
+        }
+    }
+
+    const updatePreferences = async (preferences: UserPreferences) => {
+        try {
+            if (!state.user?.id) return false
+
+            const { error } = await supabase
+                .from('users')
+                .update({
+                    preferences
+                })
+                .eq('id', state.user.id)
+
+            if (error) throw error
+
+            updateAuthState({
+                user: {
+                    ...state.user,
+                    preferences
+                }
+            })
+
+            return true
+        } catch (error) {
+            toast({
+                title: "Error",
+                description: "Failed to update preferences",
+                variant: "destructive"
+            })
+            return false
+        }
+    }
+
+    useEffect(() => {
+        // Initial session check
+        console.log("Initial session check")
+        testSupabaseConnection()
+        console.log(supabase)
+        supabase.auth.getSession().then(({ data: { session } }) => {
+            console.log("Session data", session)
+            if (session) {
+                fetchUserProfile(session.user.id)
+                setupSessionRefreshTimer(session)
+            }
+            updateAuthState({
+                session,
+                initialized: true
+            })
+        })
+
+        // Subscribe to auth changes
+        const { data: { subscription } } = supabase.auth.onAuthStateChange(
+            async (event, session) => {
                 if (session) {
-                    // Store the new tokens
-                    await supabase.auth.setSession({
-                        access_token: session.access_token,
-                        refresh_token: session.refresh_token
-                    });
-
-                    await fetchUserProfile(session.user.id);
+                    await fetchUserProfile(session.user.id)
                     updateAuthState({
                         user: session.user as AuthUser,
-                        session,
-                        loading: false
-                    });
-                    return;
+                        session
+                    })
+                    setupSessionRefreshTimer(session)
+                } else {
+                    updateAuthState({
+                        user: null,
+                        session: null
+                    })
                 }
             }
+        )
 
-            // If we get here, no valid session exists
-            updateAuthState({
-                user: null,
-                session: null,
-                loading: false,
-                error: 'No valid session'
-            });
-            navigate('/login');
-        } catch (error) {
-            console.error('Session refresh failed:', error);
-            updateAuthState({
-                user: null,
-                session: null,
-                loading: false,
-                error: 'Session expired'
-            });
-            navigate('/login');
+        // Cleanup
+        return () => {
+            subscription.unsubscribe()
+            if (refreshTimerRef.current) {
+                clearTimeout(refreshTimerRef.current)
+            }
         }
-    };
+    }, [fetchUserProfile, setupSessionRefreshTimer, updateAuthState])
+
     const contextValue: AuthContextType = {
         ...state,
         signUp,
@@ -514,19 +509,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         refreshSession,
         updateReadingProgress,
         updatePreferences
-    };
+    }
 
     return (
         <AuthContext.Provider value={contextValue}>
             {children}
         </AuthContext.Provider>
-    );
+    )
 }
 
-export const useAuth = () => {
-    const context = useContext(AuthContext);
+export function useAuth() {
+    const context = useContext(AuthContext)
     if (context === undefined) {
-        throw new Error('useAuth must be used within an AuthProvider');
+        throw new Error('useAuth must be used within an AuthProvider')
     }
-    return context;
-};
+    return context
+}
