@@ -1,16 +1,20 @@
 import { useBibleData } from './../../hooks/bibleData.js';
-import { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
-    ChevronDownIcon,
     ChevronLeftIcon,
-    ChevronRightIcon,
     BookOpenIcon,
     BookmarkIcon,
     PencilIcon,
-    ArrowLeftIcon,
+    ArrowLeftIcon, DocumentTextIcon,
 } from '@heroicons/react/24/solid';
+import BibleContent from './BibleContent';
+import BookmarksContent from './BookmarksContent';
+import NotesContent from './NotesContent';
+import {ChevronDownIcon, ChevronRightIcon} from "@heroicons/react/24/solid/index.js";
+import SessionDisplay from "./SessionDisplay.jsx";
 
-const SidebarItem = ({ icon: Icon, label, onClick, collapsed }) => (
+
+export const SidebarItem = React.memo(({ icon: Icon, label, onClick, collapsed }) => (
     <li
         className="cursor-pointer flex items-center hover:bg-gray-700 p-2 rounded"
         onClick={onClick}
@@ -18,16 +22,16 @@ const SidebarItem = ({ icon: Icon, label, onClick, collapsed }) => (
         <Icon className="h-6 w-6 text-white" />
         {!collapsed && <span className="ml-2">{label}</span>}
     </li>
-);
+));
 
-const BackHeader = ({ title, onBack, collapsed }) => (
+export const BackHeader = React.memo(({ title, onBack, collapsed }) => (
     <div className="flex items-center mb-4">
         <ChevronLeftIcon className="h-6 w-6 cursor-pointer" onClick={onBack} />
         {!collapsed && <h2 className="text-xl font-bold ml-2">{title}</h2>}
     </div>
-);
+));
 
-export default function BibleSearch() {
+export default function BibleNavigation() {
     const {
         versions,
         books,
@@ -46,63 +50,34 @@ export default function BibleSearch() {
 
     const [sidebarSection, setSidebarSection] = useState('main');
     const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-    const [highlightedVerses, setHighlightedVerses] = useState(
-        JSON.parse(localStorage.getItem('highlights')) || {}
-    );
+    const [expandedBooks, setExpandedBooks] = useState({});
     const [bookmarks, setBookmarks] = useState(
         JSON.parse(localStorage.getItem('bookmarks')) || []
     );
     const [notes, setNotes] = useState(JSON.parse(localStorage.getItem('notes')) || {});
-    const [searchQuery, setSearchQuery] = useState('');
-    const [expandedBooks, setExpandedBooks] = useState({});
+    const [sessions, setSessions] = useState(
+        JSON.parse(localStorage.getItem('sessions')) || {}
+    );
+    const [currentSession, setCurrentSession] = useState(
+        JSON.parse(localStorage.getItem('currentSession')) || null
+    );
 
     useEffect(() => {
         if (selectedVersion) fetchBooks(selectedVersion);
     }, [selectedVersion]);
 
-    const filteredVerses = useMemo(() => {
-        return verses.filter(
-            (verse) =>
-                verse.text.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                verse.verse_number.toString().includes(searchQuery)
-        );
-    }, [verses, searchQuery]);
-
     const toggleBookExpansion = (bookId) => {
+        fetchChapters(bookId);
         setExpandedBooks((prev) => ({
             ...prev,
-            [bookId]: !prev[bookId],
+            [bookId]: !prev[bookId] ? chapters : false,
         }));
-        if (!expandedBooks[bookId]) fetchChapters(bookId);
     };
 
     const handleChapterClick = (bookId, chapterId) => {
         setSelectedBook(bookId);
         setSelectedChapter(chapterId);
         fetchAndSetVerses(chapterId);
-    };
-
-    const handleHighlight = (verseId, color) => {
-        const newHighlights = { ...highlightedVerses, [verseId]: color };
-        setHighlightedVerses(newHighlights);
-        localStorage.setItem('highlights', JSON.stringify(newHighlights));
-    };
-
-    const addToBookmark = (verse) => {
-        const updatedBookmarks = [...bookmarks, verse];
-        setBookmarks(updatedBookmarks);
-        localStorage.setItem('bookmarks', JSON.stringify(updatedBookmarks));
-        alert('Verse bookmarked!');
-    };
-
-    const addNote = (verse) => {
-        const note = prompt('Add your note:');
-        if (note) {
-            const updatedNotes = { ...notes, [verse.id]: note };
-            setNotes(updatedNotes);
-            localStorage.setItem('notes', JSON.stringify(updatedNotes));
-            alert('Note added!');
-        }
     };
 
     const renderSidebarContent = () => {
@@ -126,6 +101,12 @@ export default function BibleSearch() {
                             icon={PencilIcon}
                             label="Notes"
                             onClick={() => setSidebarSection('notes')}
+                            collapsed={sidebarCollapsed}
+                        />
+                        <SidebarItem
+                            icon={DocumentTextIcon}
+                            label="Sessions"
+                            onClick={() => setSidebarSection('sessions')}
                             collapsed={sidebarCollapsed}
                         />
                     </ul>
@@ -238,6 +219,27 @@ export default function BibleSearch() {
                         </ul>
                     </>
                 );
+            case 'sessions':
+                return (
+                    <>
+                        <BackHeader
+                            title="Sessions"
+                            onBack={() => setSidebarSection('main')}
+                            collapsed={sidebarCollapsed}
+                        />
+                        <ul className="space-y-2">
+                            {Object.entries(sessions).map(([session]) => (
+                                <li
+                                    key={session.sessionName}
+                                    className="p-2 bg-gray-700 rounded cursor-pointer hover:bg-gray-600"
+                                    onClick={() => setCurrentSession(session.sessionName)}
+                                >
+                                    {session.sessionName}
+                                </li>
+                            ))}
+                        </ul>
+                    </>
+                );
             default:
                 return null;
         }
@@ -267,43 +269,37 @@ export default function BibleSearch() {
             <div className="flex-1 p-6 bg-gray-100">
                 <h1 className="text-2xl font-bold mb-4">Bible Viewer</h1>
 
-                {sidebarSection === 'bible' && selectedChapter && (
-                    <div className="bg-white p-4 rounded shadow">
-                        <h2 className="text-lg font-bold mb-2">
-                            {books.find((b) => b.id === selectedBook)?.name} - Chapter{' '}
-                            {chapters.find((ch) => ch.id === selectedChapter)?.chapter_number}
-                        </h2>
-                        <ul className="space-y-2">
-                            {filteredVerses.map((verse) => (
-                                <li
-                                    key={verse.id}
-                                    className={`cursor-pointer hover:bg-gray-200 p-2 rounded ${
-                                        highlightedVerses[verse.id]
-                                            ? `bg-${highlightedVerses[verse.id]}-200`
-                                            : ''
-                                    }`}
-                                    onDoubleClick={() => {
-                                        if (confirm('Add to Bookmark?')) addToBookmark(verse);
-                                        else addNote(verse);
-                                    }}
-                                >
-                                    <span className="font-semibold">{verse.verse_number}: </span>
-                                    {verse.text}
-                                    <button
-                                        onClick={() => handleHighlight(verse.id, 'yellow')}
-                                        className="ml-2 text-yellow-500"
-                                    >
-                                        Highlight
-                                    </button>
-                                </li>
-                            ))}
-                        </ul>
-                    </div>
+                {sidebarSection === 'bible' && (
+                    <BibleContent
+                        books={books}
+                        chapters={chapters}
+                        verses={verses}
+                        selectedBook={selectedBook}
+                        selectedChapter={selectedChapter}
+                        setSelectedBook={setSelectedBook}
+                        setSelectedChapter={setSelectedChapter}
+                        fetchAndSetVerses={fetchAndSetVerses}
+                    />
                 )}
-
-                {sidebarSection === 'bookmarks' && <p>Select a bookmark to view.</p>}
-
-                {sidebarSection === 'notes' && <p>Select a note to view details.</p>}
+                {sidebarSection === 'bookmarks' && (
+                    <BookmarksContent
+                        bookmarks={bookmarks}
+                        setSelectedBook={setSelectedBook}
+                        setSelectedChapter={setSelectedChapter}
+                        fetchAndSetVerses={fetchAndSetVerses}
+                    />
+                )}
+                {sidebarSection === 'notes' && <NotesContent notes={notes} />}
+                {/* Session Display */}
+                {currentSession && (
+                    <SessionDisplay
+                        sessionName={currentSession}
+                        sessionVerses={sessions[currentSession]}
+                        verses={verses}
+                        updateSessions={setSessions}
+                        sessions={sessions}
+                    />
+                )}
             </div>
         </div>
     );

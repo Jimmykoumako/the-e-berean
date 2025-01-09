@@ -16,9 +16,10 @@ const LinkManagement = () => {
     const fetchLinks = async () => {
         setLoading(true);
         try {
-            const { data, error } = await supabase.from("csv_links").select("*");
+            const { data, error } = await supabase.from("external_resources").select("*");
             if (error) throw error;
-
+            console.log(data)
+            console.log(error)
             setLinks(data);
 
             // Save to local storage

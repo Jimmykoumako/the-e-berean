@@ -230,8 +230,7 @@ export function useBibleReading({
       const [chapter, verse] = parts[parts.length - 1].split(':').map(Number);
 
       // Validate reference against database
-      const { data: bookData, error: bookError } = await supabaseClient
-          .from('books')
+      const { data: bookData, error: bookError } = await supabaseClient.from('books')
           .select('id, chapter_count')
           .eq('name', book)
           .eq('bible_version_id', await getVersionId(readingState.currentVersion))

@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { persistQueryClient } from '@tanstack/react-query-persist-client';
 import { createSyncStoragePersister } from '@tanstack/query-sync-storage-persister';
 import { supabase } from './../../supabaseClient'
-import {useEffect} from "react";
+import {useEffect, useState} from "react";
 
 
 // Storage persister setup
@@ -55,6 +55,16 @@ const api = {
         if (error) throw error;
         return data;
     },
+};
+
+export const useBooks = (selectedVersion) => {
+    return useQuery({
+        queryKey: ['books', selectedVersion],
+        queryFn: () => api.getBooks(selectedVersion),
+        enabled: !!selectedVersion,
+        staleTime: 24 * 60 * 60 * 1000,
+        cacheTime: 7 * 24 * 60 * 60 * 1000,
+    });
 };
 
 export function useBibleData() {

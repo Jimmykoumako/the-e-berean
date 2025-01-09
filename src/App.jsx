@@ -1,65 +1,151 @@
 import  { useEffect, useState } from 'react';
 import { supabase } from '../supabaseClient.js';
-import LinkManagement from "./Components/public/LinkManagement.jsx";
-import LoadBibleData from "./Components/public/loadBibleData.jsx";
-import DownloadBibleFiles from "./Components/public/DownloadBibleFiles.jsx";
-import BibleDataUploader from "./Components/public/BibleDataUploader.jsx";
-import BibleSearch from "./Components/public/BibleSearch.jsx";
+import {BrowserRouter as Router, Routes, Route, BrowserRouter, Navigate} from "react-router-dom";
+import Sidebar from "./Components/Sidebar";
+import {AuthProvider} from "@/hooks/useAuth.tsx";
+import {useAuth} from '@/hooks/useAuth'
+import {MainLayout} from "@/Components/layout/MainLayout";
+import {ResetPassword} from "@/Components/auth/PasswordReset";
+import {Register} from "@/Components/auth/Register";
+import {Login} from "@/Components/auth/Login";
+import {Toaster} from "react-hot-toast";
+import Home from "@/pages/Home.jsx";
+import Bible from "@/pages/Bible.jsx";
+import Notes from "@/pages/Notes.jsx";
+import Bookmarks from "@/pages/Bookmarks.jsx";
+import Settings from "@/pages/Settings.jsx";
+import {Loader2} from "lucide-react";
+import UserList from "@/Components/public/UserList.jsx";
+import RootLayout from "@/Components/layout/RootLayout";
+import BibleReadingTest from "@/Components/Bible/BibleReadingTest";
+import BibleReader from "@/Components/Bible/BibleReader";
+import {Providers} from "@/providers";
+import {ProtectedRoute} from "@/Components/auth/ProtectedRoute";
+import AuthLoading from "@/Components/auth/AuthLoading";
+
+
+const ProtectedRoute2 = ({
+                                   children,
+                                   redirectPath = '/login',
+
+}) => {
+    const { user, loading, refreshSession } = useAuth();
+
+    // Use in components that need fresh session data
+    useEffect(() => {
+        refreshSession();
+    }, []);
+    if (loading) {
+        console.log("Auth State:", { user, loading });
+                return (
+            <div className="h-screen w-screen flex items-center justify-center">
+                <Loader2 className="h-8 w-8 animate-spin" />
+            </div>
+        );
+    }
+
+
+    if (!user) {
+        return <Navigate to={redirectPath} />;
+    }
+
+    return children;
+};
+
+
+const getUserRole = () => "user";
 
 function App() {
-    const [data, setData] = useState([]);
-    const [error, setError] = useState(null);
-
-    useEffect(() => {
-        const fetchData = async () => {
-            try {
-                const { data, error } = await supabase.from('bible_versions').select('*');
-                if (error) throw error;
-                setData(data);
-            } catch (err) {
-                setError(err.message);
-            }
-        };
-        fetchData();
-        console.log(import.meta.env.VITE_SUPABASE_URL);
-
-    }, []);
-
-    const [versionId, setVersionId] = useState(1); // Example Bible version ID
-
-    const handleComplete = () => {
-        alert("All data has been loaded!");
-    };
-
-    const handleLoadFile = async (file) => {
-        try {
-            console.log("File being loaded:", file.csv_type);
-            console.log("File content:", file.content);
-
-            // TODO: Parse and insert the file content into the database
-            alert(`Successfully loaded ${file.csv_type} into the database.`);
-        } catch (error) {
-            console.error("Error loading file:", error.message);
-            alert("Failed to load the file.");
-        }
-    };
 
     return (
+        <BrowserRouter>
+        <Providers>
+          <AuthLoading>
+                <Routes>
+                    {/* Public Routes */}
+                    <Route path="/test" element={<BibleReader />} />
+                    <Route path="/login" element={<Login />} />
+                    <Route path="/register" element={<Register />} />
+                    <Route path="/reset-password" element={<ResetPassword />} />
+
+                    {/* Protected Routes */}
+                    <Route
+                        path="/"
+                        element={
+                            <ProtectedRoute>
+                                <MainLayout>
+                                    <Home />
+                                </MainLayout>
+                            </ProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/bible"
+                        element={
+                            <ProtectedRoute>
+                                <MainLayout>
+                                    <Bible />
+                                </MainLayout>
+                            </ProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/notes"
+                        element={
+                            <ProtectedRoute>
+                                <MainLayout>
+                                    <Notes />
+                                </MainLayout>
+                            </ProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/bookmarks"
+                        element={
+                            <ProtectedRoute>
+                                <MainLayout>
+                                    <Bookmarks />
+                                </MainLayout>
+                            </ProtectedRoute>
+                        }
+                    />
+                    <Route
+                        path="/settings"
+                        element={
+                            <ProtectedRoute>
+                                <MainLayout>
+                                    <Settings />
+                                </MainLayout>
+                            </ProtectedRoute>
+                        }
+                    />
+                </Routes>
+          </AuthLoading>
+        </Providers>
+        </BrowserRouter>
+
         // <div>
         //     <h1>Supabase Test</h1>
         //     {error ? <p>Error: {error}</p> : <pre>{JSON.stringify(data, null, 2)}</pre>}
         // </div>
-        <div>
-            {/*<div className="p-8">*/}
-            {/*    <h1 className="text-2xl font-bold mb-4">Bible Data Management</h1>*/}
-            {/*    <LoadBibleData bibleVersionId={versionId} onComplete={handleComplete}/>*/}
+        // <div>
+        //     {/*<div className="p-8">*/}
+        //     {/*    <h1 className="text-2xl font-bold mb-4">Bible Data Management</h1>*/}
+        //     {/*    <LoadBibleData bibleVersionId={versionId} onComplete={handleComplete}/>*/}
+        //
+        //     {/*</div>*/}
+        //     {/*<DownloadBibleFiles  onLoadFile={handleLoadFile} />*/}
+        //     {/*<BibleDataUploader />*/}
+        //     {/*<BibleNavigation />*/}
+        //     <BibleSearchV1 />
+        //     <QueryClientProvider client={queryClient}>
+        //         {/*<Component {...pageProps} />*/}
+        //     </QueryClientProvider>
+        // </div>
 
-            {/*</div>*/}
-            {/*<DownloadBibleFiles  onLoadFile={handleLoadFile} />*/}
-            {/*<BibleDataUploader />*/}
-            <BibleSearch />
-        </div>
     );
 }
 
 export default App;
+
+

@@ -1,0 +1,31 @@
+// import { useAuth } from '@/hooks/useAuth';
+// import { useNavigate } from 'react-router-dom'; // React Router for navigation
+// import { ComponentType, useEffect } from 'react';
+// import { Loader2 } from "lucide-react";
+//
+// export function withAuth<P extends object>(WrappedComponent: ComponentType<P>) {
+//     return function WithAuthComponent(props: P) {
+//         const { user, loading } = useAuth();
+//         const navigate = useNavigate(); // React Router's navigation hook
+//
+//         useEffect(() => {
+//             if (!loading && !user) {
+//                 navigate('/login'); // Redirect to login page if not authenticated
+//             }
+//         }, [user, loading, navigate]);
+//
+//         if (loading) {
+//             return (
+//                 <div className="h-screen w-screen flex items-center justify-center">
+//                     <Loader2 className="h-8 w-8 animate-spin" />
+//                 </div>
+//             );
+//         }
+//
+//         if (!user) {
+//             return null;
+//         }
+//
+//         return <WrappedComponent {...props} />;
+//     };
+// }
