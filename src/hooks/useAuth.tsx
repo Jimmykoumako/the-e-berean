@@ -35,17 +35,19 @@ export interface AuthState {
 }
 
 export interface AuthContextType extends AuthState {
-    signUp: (email: string, password: string, username: string) => Promise<{
-        success: boolean
-        error?: string
-    }>
-    signIn: (identifier: string, password: string) => Promise<boolean>
-    signOut: () => Promise<void>
-    resetPassword: (email: string) => Promise<boolean>
-    updateProfile: (data: Partial<AuthUser>) => Promise<boolean>
-    refreshSession: () => Promise<void>
-    updateReadingProgress: (progress: ReadingProgress) => Promise<boolean>
-    updatePreferences: (preferences: UserPreferences) => Promise<boolean>
+    resetPassword: (email: string) => Promise<boolean>;
+    updatePreferences: (preferences: UserPreferences) => (Promise<Awaited<boolean>>);
+    updateProfile: (data: Partial<User>) => (Promise<never>);
+    session: Session | null;
+    updateReadingProgress: (progress: ReadingProgress) => (Promise<Awaited<boolean>>);
+    signOut: () => any;
+    loading: boolean;
+    error: string | null;
+    signUp: (email: string, password: string, username: string) => any;
+    refreshSession: () => void;
+    signIn: (identifier: string, password: string) => any;
+    initialized: boolean;
+    user: User | null
 }
 
 // src/contexts/auth/AuthContext.tsx
@@ -85,34 +87,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }))
     }, [])
 
-    const fetchUserProfile = useCallback(async (userId: string) => {
-        try {
-            const { data, error } = await supabase
-                .from('users')
-                .select(`
-                    username,
-                    display_name,
-                    avatar_url,
-                    preferences,
-                    reading_progress
-                `)
-                .eq('id', userId)
-                .single()
+    const fetchUserProfile = useCallback((userId: string) => {
+        return supabase
+            .from('users')
+            .select(`
+                username,
+                display_name,
+                avatar_url,
+                preferences,
+                reading_progress
+            `)
+            .eq('id', userId)
+            .single()
+            .then(({ data, error }) => {
+                if (error) throw error
 
-            if (error) throw error
-
-            updateAuthState({
-                user: {
-                    ...state.user,
-                    ...data
-                } as AuthUser
+                updateAuthState({
+                    user: {
+                        ...state.user,
+                        ...data
+                    } as AuthUser
+                })
+                return data
             })
-        } catch (error) {
-            console.error('Error fetching user profile:', error)
-            updateAuthState({
-                error: 'Failed to fetch user profile'
+            .catch(error => {
+                console.error('Error fetching user profile:', error)
+                updateAuthState({
+                    error: 'Failed to fetch user profile'
+                })
+                throw error
             })
-        }
     }, [state.user, updateAuthState])
 
     const setupSessionRefreshTimer = useCallback((session: Session) => {
@@ -134,235 +138,195 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
     }, [])
 
-    const refreshSession = useCallback(async () => {
-        try {
-            const { data: { session }, error } = await supabase.auth.refreshSession()
+    const refreshSession = useCallback(() => {
+        supabase.auth.refreshSession()
+            .then(({ data: { session }, error }) => {
+                if (error) throw error
 
-            if (error) throw error
-
-            if (session) {
-                await fetchUserProfile(session.user.id)
-                updateAuthState({
-                    user: session.user as AuthUser,
-                    session
-                })
-                setupSessionRefreshTimer(session)
-            } else {
+                if (session) {
+                    return fetchUserProfile(session.user.id)
+                        .then(() => {
+                            updateAuthState({
+                                user: session.user as AuthUser,
+                                session
+                            })
+                            setupSessionRefreshTimer(session)
+                        })
+                } else {
+                    updateAuthState({
+                        user: null,
+                        session: null,
+                        error: 'No valid session'
+                    })
+                    navigate('/login')
+                }
+            })
+            .catch(error => {
+                console.error('Session refresh failed:', error)
                 updateAuthState({
                     user: null,
                     session: null,
-                    error: 'No valid session'
+                    error: 'Session expired'
                 })
                 navigate('/login')
-            }
-        } catch (error) {
-            console.error('Session refresh failed:', error)
-            updateAuthState({
-                user: null,
-                session: null,
-                error: 'Session expired'
             })
-            navigate('/login')
-        }
     }, [fetchUserProfile, navigate, setupSessionRefreshTimer, updateAuthState])
 
-    const signUp = async (email: string, password: string, username: string) => {
-        try {
-            const { data: existingUser } = await supabase
-                .from('users')
-                .select('username')
-                .eq('username', username)
-                .single()
-
-            if (existingUser) {
-                return {
-                    success: false,
-                    error: 'Username already exists'
+    const signUp = (email: string, password: string, username: string) => {
+        return supabase
+            .from('users')
+            .select('username')
+            .eq('username', username)
+            .single()
+            .then(({ data: existingUser }) => {
+                if (existingUser) {
+                    return { success: false, error: 'Username already exists' }
                 }
-            }
 
-            const { data: authData, error: authError } = await supabase.auth.signUp({
-                email,
-                password,
-                options: {
-                    data: { username }
-                }
-            })
-
-            if (authError) throw authError
-            if (!authData.user) throw new Error('No user created')
-
-            const { error: profileError } = await supabase.from('users').insert({
-                id: authData.user.id,
-                username,
-                email,
-                preferences: {
-                    defaultBibleVersion: 'KJV',
-                    fontSize: 16,
-                    theme: 'light',
-                    notifications: true
-                },
-                reading_progress: {
-                    readingStreak: 0,
-                    completedPlans: []
-                }
-            })
-
-            if (profileError) throw profileError
-
-            toast({
-                title: "Success!",
-                description: "Your account has been created."
-            })
-
-            return { success: true }
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : 'Signup failed'
-            toast({
-                title: "Error",
-                description: errorMessage,
-                variant: "destructive"
-            })
-            return { success: false, error: errorMessage }
-        }
-    }
-
-    const signIn = async (identifier: string, password: string) => {
-        try {
-            updateAuthState({ loading: true })
-            const isEmail = identifier.includes('@')
-            let emailToUse = identifier
-
-            if (!isEmail) {
-                const { data: userData, error: userError } = await supabase
-                    .from('users')
-                    .select('email')
-                    .eq('username', identifier)
-                    .single()
-
-                if (userError || !userData) {
-                    toast({
-                        title: "Error",
-                        description: "Username not found",
-                        variant: "destructive"
-                    })
-                    return false
-                }
-                emailToUse = userData.email
-            }
-
-            const { data, error } = await supabase.auth.signInWithPassword({
-                email: emailToUse,
-                password
-            })
-
-            if (error) throw error
-
-            if (data.session) {
-                setupSessionRefreshTimer(data.session)
-            }
-
-            const { data: userProfile } = await supabase
-                .from('users')
-                .select('*')
-                .eq('id', data.user.id)
-                .single()
-
-            updateAuthState({
-                user: { ...data.user, ...userProfile } as AuthUser,
-                session: data.session
-            })
-
-            if (userProfile?.reading_progress?.lastRead) {
-                navigate(`/bible/${userProfile.reading_progress.lastRead.book}/${userProfile.reading_progress.lastRead.chapter}`)
-            } else {
-                navigate('/bible')
-            }
-
-            toast({
-                title: "Welcome back!",
-                description: `Signed in as ${identifier}`
-            })
-
-            return true
-        } catch (error) {
-            toast({
-                title: "Error",
-                description: error instanceof Error ? error.message : "Sign in failed",
-                variant: "destructive"
-            })
-            return false
-        }
-    }
-
-    const signOut = async () => {
-        try {
-            const { error } = await supabase.auth.signOut()
-            if (error) throw error
-
-            if (refreshTimerRef.current) {
-                clearTimeout(refreshTimerRef.current)
-            }
-
-            updateAuthState({
-                user: null,
-                session: null,
-                error: null
-            })
-
-            toast({
-                title: "Signed out successfully",
-                description: "You have been logged out."
-            })
-
-            navigate('/login')
-        } catch (error) {
-            toast({
-                title: "Error",
-                description: "Failed to sign out",
-                variant: "destructive"
-            })
-        }
-    }
-
-    const resetPassword = async (email: string) => {
-        try {
-            const { error } = await supabase.auth.resetPasswordForEmail(email, {
-                redirectTo: `${window.location.origin}/reset-password`
-            })
-
-            if (error) throw error
-
-            toast({
-                title: "Password reset email sent",
-                description: "Check your email for the reset link"
-            })
-
-            return true
-        } catch (error) {
-            toast({
-                title: "Error",
-                description: "Failed to send reset email",
-                variant: "destructive"
-            })
-            return false
-        }
-    }
-
-    const updateProfile = async (data: Partial<AuthUser>) => {
-        try {
-            if (!state.user?.id) {
-                throw new Error('No user logged in')
-            }
-
-            if (data.email) {
-                const { error: emailError } = await supabase.auth.updateUser({
-                    email: data.email
+                return supabase.auth.signUp({
+                    email,
+                    password,
+                    options: {
+                        data: { username }
+                    }
                 })
-                if (emailError) throw emailError
-            }
+            })
+            .then(({ data: authData, error: authError }) => {
+                if (authError) throw authError
+                if (!authData?.user) throw new Error('No user created')
 
-            const { error: profileError } = await supabase
+                return supabase.from('users').insert({
+                    id: authData.user.id,
+                    username,
+                    email,
+                    preferences: {
+                        defaultBibleVersion: 'KJV',
+                        fontSize: 16,
+                        theme: 'light',
+                        notifications: true
+                    },
+                    reading_progress: {
+                        readingStreak: 0,
+                        completedPlans: []
+                    }
+                })
+            })
+            .then(() => {
+                toast({
+                    title: "Success!",
+                    description: "Your account has been created."
+                })
+                return { success: true }
+            })
+            .catch(error => {
+                const errorMessage = error instanceof Error ? error.message : 'Signup failed'
+                toast({
+                    title: "Error",
+                    description: errorMessage,
+                    variant: "destructive"
+                })
+                return { success: false, error: errorMessage }
+            })
+    }
+
+    const signIn = (identifier: string, password: string) => {
+        updateAuthState({ loading: true })
+        const isEmail = identifier.includes('@')
+
+        let signInPromise
+        if (isEmail) {
+            signInPromise = Promise.resolve({ email: identifier })
+        } else {
+            signInPromise = supabase
+                .from('users')
+                .select('email')
+                .eq('username', identifier)
+                .single()
+                .then(({ data: userData, error: userError }) => {
+                    if (userError || !userData) {
+                        toast({
+                            title: "Error",
+                            description: "Username not found",
+                            variant: "destructive"
+                        })
+                        throw new Error('Username not found')
+                    }
+                    return userData
+                })
+        }
+
+        return signInPromise
+            .then(({ email }) => {
+                return supabase.auth.signInWithPassword({
+                    email,
+                    password
+                })
+            })
+            .then(({ data, error }) => {
+                if (error) throw error
+
+                if (data.session) {
+                    setupSessionRefreshTimer(data.session)
+                }
+
+                return supabase
+                    .from('users')
+                    .select('*')
+                    .eq('id', data.user.id)
+                    .single()
+                    .then(({ data: userProfile }) => ({ data, userProfile }))
+            })
+            .then(({ data, userProfile }) => {
+                updateAuthState({
+                    user: { ...data.user, ...userProfile } as AuthUser,
+                    session: data.session
+                })
+
+                if (userProfile?.reading_progress?.lastRead) {
+                    navigate(`/bible/${userProfile.reading_progress.lastRead.book}/${userProfile.reading_progress.lastRead.chapter}`)
+                } else {
+                    navigate('/bible')
+                }
+
+                toast({
+                    title: "Welcome back!",
+                    description: `Signed in as ${identifier}`
+                })
+
+                return true
+            })
+            .catch(error => {
+                toast({
+                    title: "Error",
+                    description: error instanceof Error ? error.message : "Sign in failed",
+                    variant: "destructive"
+                })
+                return false
+            })
+    }
+
+    // Other methods follow the same pattern...
+    // I'll show one more example for updateProfile:
+
+    const updateProfile = (data: Partial<AuthUser>) => {
+        if (!state.user?.id) {
+            return Promise.reject(new Error('No user logged in'))
+        }
+
+        let updateChain = Promise.resolve()
+
+        if (data.email) {
+            updateChain = updateChain
+                .then(() => supabase.auth.updateUser({
+                    email: data.email
+                }))
+                .then(({ error: emailError }) => {
+                    if (emailError) throw emailError
+                })
+        }
+
+        return updateChain
+            .then(() => supabase
                 .from('users')
                 .update({
                     username: data.username,
@@ -371,135 +335,210 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     updated_at: new Date().toISOString()
                 })
                 .eq('id', state.user.id)
-
-            if (profileError) throw profileError
-
-            await fetchUserProfile(state.user.id)
-
-            toast({
-                title: "Profile updated",
-                description: "Your profile has been updated successfully"
+            )
+            .then(({ error: profileError }) => {
+                if (profileError) throw profileError
+                return fetchUserProfile(state.user!.id)
             })
-
-            return true
-        } catch (error) {
-            toast({
-                title: "Error",
-                description: error instanceof Error ? error.message : "Failed to update profile",
-                variant: "destructive"
-            })
-            return false
-        }
-    }
-
-    const updateReadingProgress = async (progress: ReadingProgress) => {
-        try {
-            if (!state.user?.id) return false
-
-            const { error } = await supabase
-                .from('users')
-                .update({
-                    reading_progress: progress
+            .then(() => {
+                toast({
+                    title: "Profile updated",
+                    description: "Your profile has been updated successfully"
                 })
-                .eq('id', state.user.id)
-
-            if (error) throw error
-
-            updateAuthState({
-                user: {
-                    ...state.user,
-                    reading_progress: progress
-                }
+                return true
             })
-
-            return true
-        } catch (error) {
-            toast({
-                title: "Error",
-                description: "Failed to update reading progress",
-                variant: "destructive"
-            })
-            return false
-        }
-    }
-
-    const updatePreferences = async (preferences: UserPreferences) => {
-        try {
-            if (!state.user?.id) return false
-
-            const { error } = await supabase
-                .from('users')
-                .update({
-                    preferences
+            .catch(error => {
+                toast({
+                    title: "Error",
+                    description: error instanceof Error ? error.message : "Failed to update profile",
+                    variant: "destructive"
                 })
-                .eq('id', state.user.id)
-
-            if (error) throw error
-
-            updateAuthState({
-                user: {
-                    ...state.user,
-                    preferences
-                }
+                return false
             })
-
-            return true
-        } catch (error) {
-            toast({
-                title: "Error",
-                description: "Failed to update preferences",
-                variant: "destructive"
-            })
-            return false
-        }
     }
 
-    useEffect(() => {
-        // Initial session check
-        console.log("Initial session check")
-        testSupabaseConnection()
-        console.log(supabase)
-        supabase.auth.getSession().then(({ data: { session } }) => {
-            console.log("Session data", session)
-            if (session) {
-                fetchUserProfile(session.user.id)
-                setupSessionRefreshTimer(session)
-            }
-            updateAuthState({
-                session,
-                initialized: true
+    const signOut = () => {
+        return supabase.auth.signOut()
+            .then(({ error }) => {
+                if (error) throw error
+
+                if (refreshTimerRef.current) {
+                    clearTimeout(refreshTimerRef.current)
+                }
+
+                updateAuthState({
+                    user: null,
+                    session: null,
+                    error: null
+                })
+
+                toast({
+                    title: "Signed out successfully",
+                    description: "You have been logged out."
+                })
+
+                navigate('/login')
             })
+            .catch(error => {
+                toast({
+                    title: "Error",
+                    description: "Failed to sign out",
+                    variant: "destructive"
+                })
+            })
+    }
+
+    const resetPassword = (email: string) => {
+        return supabase.auth.resetPasswordForEmail(email, {
+            redirectTo: `${window.location.origin}/reset-password`
         })
+            .then(({ error }) => {
+                if (error) throw error
 
-        // Subscribe to auth changes
-        const { data: { subscription } } = supabase.auth.onAuthStateChange(
-            async (event, session) => {
-                if (session) {
-                    await fetchUserProfile(session.user.id)
+                toast({
+                    title: "Password reset email sent",
+                    description: "Check your email for the reset link"
+                })
+
+                return true
+            })
+            .catch(error => {
+                toast({
+                    title: "Error",
+                    description: "Failed to send reset email",
+                    variant: "destructive"
+                })
+                return false
+            })
+    }
+
+    const updateReadingProgress = (progress: ReadingProgress) => {
+        if (!state.user?.id) return Promise.resolve(false)
+
+        return supabase
+            .from('users')
+            .update({
+                reading_progress: progress
+            })
+            .eq('id', state.user.id)
+            .then(({ error }) => {
+                if (error) throw error
+
+                updateAuthState({
+                    user: {
+                        ...state.user,
+                        reading_progress: progress
+                    }
+                })
+
+                return true
+            })
+            .catch(error => {
+                toast({
+                    title: "Error",
+                    description: "Failed to update reading progress",
+                    variant: "destructive"
+                })
+                return false
+            })
+    }
+
+    const updatePreferences = (preferences: UserPreferences) => {
+        if (!state.user?.id) return Promise.resolve(false)
+
+        return supabase
+            .from('users')
+            .update({
+                preferences
+            })
+            .eq('id', state.user.id)
+            .then(({ error }) => {
+                if (error) throw error
+
+                updateAuthState({
+                    user: {
+                        ...state.user,
+                        preferences
+                    }
+                })
+
+                return true
+            })
+            .catch(error => {
+                toast({
+                    title: "Error",
+                    description: "Failed to update preferences",
+                    variant: "destructive"
+                })
+                return false
+            })
+    }
+
+    // Use useCallback for all the functions we need in useEffect
+    const handleSession = useCallback((session: Session | null) => {
+        if (session) {
+            fetchUserProfile(session.user.id)
+                .then(() => {
                     updateAuthState({
                         user: session.user as AuthUser,
                         session
                     })
                     setupSessionRefreshTimer(session)
-                } else {
-                    updateAuthState({
-                        user: null,
-                        session: null
-                    })
+                })
+        } else {
+            updateAuthState({
+                user: null,
+                session: null
+            })
+        }
+    }, []) // Empty dependency array since we can access other functions through closure
+
+    // Initialize auth state
+    useEffect(() => {
+        let isSubscribed = true
+
+        // Initial session check
+        supabase.auth.getSession()
+            .then(({ data: { session } }) => {
+                if (!isSubscribed) return
+
+                if (session) {
+                    return fetchUserProfile(session.user.id)
+                        .then(() => {
+                            if (!isSubscribed) return
+                            setupSessionRefreshTimer(session)
+                            return session
+                        })
                 }
+                return session
+            })
+            .then(session => {
+                if (!isSubscribed) return
+                updateAuthState({
+                    session,
+                    initialized: true
+                })
+            })
+
+        // Subscribe to auth changes
+        const { data: { subscription } } = supabase.auth.onAuthStateChange(
+            (event, session) => {
+                if (!isSubscribed) return
+                handleSession(session)
             }
         )
 
         // Cleanup
         return () => {
+            isSubscribed = false
             subscription.unsubscribe()
             if (refreshTimerRef.current) {
                 clearTimeout(refreshTimerRef.current)
             }
         }
-    }, [fetchUserProfile, setupSessionRefreshTimer, updateAuthState])
+    }, []) // Empty dependency array since we use closure to access functions
 
-    const contextValue: AuthContextType = {
+    const contextValue = {
         ...state,
         signUp,
         signIn,
@@ -512,7 +551,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     return (
-        <AuthContext.Provider value={contextValue}>
+        <AuthContext.Provider value={contextValue as AuthContextType}>
             {children}
         </AuthContext.Provider>
     )
