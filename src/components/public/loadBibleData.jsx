@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { supabase } from "./../../../supabaseClient";
-import { getTestamentId } from "../../utlis/bibleBooks.js";
+import { supabase } from "../../../supabaseClient";
+import { getTestamentId } from "../../utlis/bibleBooks";
 
 const BATCH_SIZE = 1000; // Increased batch size since we're handling fewer fields
 

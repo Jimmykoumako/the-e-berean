@@ -1,4 +1,4 @@
-import { useBibleData } from './../../hooks/bibleData.js';
+import { useBibleData } from '../../hooks/bibleData.js';
 import React, { useState, useEffect, useMemo } from 'react';
 import {
     ChevronLeftIcon,
@@ -7,10 +7,10 @@ import {
     PencilIcon,
     ArrowLeftIcon, DocumentTextIcon,
 } from '@heroicons/react/24/solid';
-import BibleContent from './BibleContent';
-import BookmarksContent from './BookmarksContent';
-import NotesContent from './NotesContent';
-import {ChevronDownIcon, ChevronRightIcon} from "@heroicons/react/24/solid/index.js";
+import BibleContent from './BibleContent.jsx';
+import BookmarksContent from './BookmarksContent.jsx';
+import NotesContent from './NotesContent.jsx';
+import {ChevronDownIcon, ChevronRightIcon} from "@heroicons/react/24/solid/index";
 import SessionDisplay from "./SessionDisplay.jsx";
 
 

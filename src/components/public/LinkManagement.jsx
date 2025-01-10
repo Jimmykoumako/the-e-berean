@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { supabase } from "./../../../supabaseClient";
+import { supabase } from "../../../supabaseClient";
 import AddEditLink from "./AddEditLink";
 import SaveFilesToStorage from "./SaveFilesToStorage.jsx";
 

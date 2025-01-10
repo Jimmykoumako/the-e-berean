@@ -1,13 +1,13 @@
-import {Card, CardContent} from "@/Components/ui/card";
+import {Card, CardContent} from "@/components/ui/card";
 import {
     NavigationMenu,
     NavigationMenuItem,
     NavigationMenuLink,
     NavigationMenuList
-} from "@/Components/ui/navigation-menu";
-import {Button} from "@/Components/ui/button";
+} from "@/components/ui/navigation-menu";
+import {Button} from "@/components/ui/button";
 import {Menu} from "lucide-react";
-import {Sheet, SheetContent, SheetTrigger} from "@/Components/ui/sheet";
+import {Sheet, SheetContent, SheetTrigger} from "@/components/ui/sheet";
 import useSidebarMenu from "@/hooks/useSidebarMenu";
 
 export const Sidebar = ({ userRole }) => {

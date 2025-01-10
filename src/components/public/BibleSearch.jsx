@@ -1,4 +1,4 @@
-import { useBibleData } from './../../hooks/bibleData.js';
+import { useBibleData } from '../../hooks/bibleData.js';
 import { useState, useEffect, useMemo } from 'react';
 import {
     ChevronDownIcon,

@@ -1,5 +1,5 @@
-import RootLayout from "@/Components/layout/RootLayout";
-import BibleReader from "@/Components/Bible/BibleReader";
+import RootLayout from "@/components/layout/RootLayout";
+import BibleReader from "@/components/Bible/BibleReader";
 
 const Bible = () => {
   return <RootLayout>

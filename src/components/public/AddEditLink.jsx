@@ -1,6 +1,6 @@
 
 import  { useState, useEffect } from "react";
-import { supabase } from "./../../../supabaseClient";
+import { supabase } from "../../../supabaseClient";
 import toast, { Toaster } from "react-hot-toast"; // Notifications
 
 const AddEditLink = ({ linkToEdit, onComplete }) => {

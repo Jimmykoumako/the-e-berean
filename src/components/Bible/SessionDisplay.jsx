@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import {supabase} from "../../../supabaseClient.js";
+import {supabase} from "../../../supabaseClient";
 
 const SessionDisplay = ({ sessionName, sessionVerses, updateSessions, sessions }) => {
     const [noteEdit, setNoteEdit] = useState(null);

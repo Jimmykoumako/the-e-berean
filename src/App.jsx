@@ -1,13 +1,13 @@
 import  { useEffect, useState } from 'react';
 import { supabase } from '../supabaseClient.js';
 import {BrowserRouter as Router, Routes, Route, BrowserRouter, Navigate} from "react-router-dom";
-import Sidebar from "./Components/Sidebar";
+//import Sidebar from "./Components/Sidebar";
 import {AuthProvider} from "@/hooks/useAuth.tsx";
 import {useAuth} from '@/hooks/useAuth'
-import {MainLayout} from "@/Components/layout/MainLayout";
-import {ResetPassword} from "@/Components/auth/PasswordReset";
-import {Register} from "@/Components/auth/Register";
-import {Login} from "@/Components/auth/Login";
+import {MainLayout} from "@/components/layout/MainLayout";
+import {ResetPassword} from "@/components/auth/PasswordReset";
+import {Register} from "@/components/auth/Register";
+import {Login} from "@/components/auth/Login";
 import {Toaster} from "react-hot-toast";
 import Home from "@/pages/Home.jsx";
 import Bible from "@/pages/Bible.jsx";
@@ -15,13 +15,13 @@ import Notes from "@/pages/Notes.jsx";
 import Bookmarks from "@/pages/Bookmarks.jsx";
 import Settings from "@/pages/Settings.jsx";
 import {Loader2} from "lucide-react";
-import UserList from "@/Components/public/UserList.jsx";
-import RootLayout from "@/Components/layout/RootLayout";
-import BibleReadingTest from "@/Components/Bible/BibleReadingTest";
-import BibleReader from "@/Components/Bible/BibleReader";
+import UserList from "@/components/public/UserList.jsx";
+import RootLayout from "@/components/layout/RootLayout";
+import BibleReadingTest from "@/components/Bible/BibleReadingTest";
+import BibleReader from "@/components/Bible/BibleReader";
 import {Providers} from "@/providers";
-import {ProtectedRoute} from "@/Components/auth/ProtectedRoute";
-import AuthLoading from "@/Components/auth/AuthLoading";
+import {ProtectedRoute} from "@/components/auth/ProtectedRoute";
+import AuthLoading from "@/components/auth/AuthLoading";
 
 
 const ProtectedRoute2 = ({

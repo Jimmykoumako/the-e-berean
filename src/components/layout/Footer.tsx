@@ -1,6 +1,6 @@
-import { Separator } from "@/components/ui/separator"
+import { Separator } from '@/components/ui/separator'
 import { Button } from "@/components/ui/button"
-import { Icons } from "@/components/ui/icons"
+import { Icons } from "@/components/ui/icons.js"
 
 export const Footer = () => {
     return (
